@@ -8,7 +8,7 @@
   "license": "GPL-3.0-or-later",
   "author": {
     "name": "Vikash Gupta",
-    "email": "5319600+pOoOf@users.noreply.github.com"
+    "email": "5319600+vkg92@users.noreply.github.com"
   },
   "main": ".webpack/main/index.cjs",
   "scripts": {

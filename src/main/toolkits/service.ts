@@ -16,7 +16,7 @@ import {
   type ToolkitVariant,
   buildCatalog,
 } from './catalog';
-import { fetchFeed } from './feed';
+import { type FeedSource, fetchFeed } from './feed';
 import { ToolkitInstaller } from './installer';
 import { published } from './published';
 import { ToolkitMissingError, type ToolkitStore } from './store';
@@ -26,7 +26,7 @@ export type ToolkitsDeps = {
   /** "<os>-<arch>", as in vendor/. */
   target: string;
   /** The signed feed of newer releases, if the app has one. */
-  feed?: { url: string; publicKey: string } | null;
+  feed?: FeedSource | null;
   /** Releases besides the pinned ones (./published.ts); for tests. */
   overlays?: ReleaseOverlay[];
 };

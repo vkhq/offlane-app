@@ -39,6 +39,7 @@ import { toProbeResult } from '../main/engine/probe';
 import { parseLine, ProgressTracker } from '../main/engine/progress';
 import type { ToolkitRelease } from '../main/toolkits/catalog';
 import { parseFeed, verifyFeed } from '../main/toolkits/feed';
+import { feedPublicKeys } from '../main/toolkits/trust';
 import { ToolkitInstaller } from '../main/toolkits/installer';
 import { Toolkits } from '../main/toolkits/service';
 import {
@@ -1282,20 +1283,40 @@ describe('toolkit feed', () => {
     const pem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
     const body = Buffer.from('{"toolkits":{}}');
     const signature = sign(null, body, privateKey).toString('base64');
-    assert.equal(verifyFeed(body, signature, pem), true);
+    assert.equal(verifyFeed(body, signature, [pem]), true);
     assert.equal(
-      verifyFeed(Buffer.from('{"toolkits":1}'), signature, pem),
+      verifyFeed(Buffer.from('{"toolkits":1}'), signature, [pem]),
       false,
     );
-    const other = generateKeyPairSync('ed25519').publicKey;
-    assert.equal(
-      verifyFeed(
-        body,
-        signature,
-        other.export({ type: 'spki', format: 'pem' }).toString(),
-      ),
-      false,
-    );
+    const other = generateKeyPairSync('ed25519')
+      .publicKey.export({ type: 'spki', format: 'pem' })
+      .toString();
+    assert.equal(verifyFeed(body, signature, [other]), false);
+    assert.equal(verifyFeed(body, signature, []), false);
+  });
+
+  test('any listed key is trusted, so the signing key can be rotated', async () => {
+    const { generateKeyPairSync, sign } = await import('node:crypto');
+    const pemOf = (key: import('node:crypto').KeyObject) =>
+      key.export({ type: 'spki', format: 'pem' }).toString();
+    const current = generateKeyPairSync('ed25519');
+    const next = generateKeyPairSync('ed25519');
+    const keys = ['not a key', pemOf(current.publicKey), pemOf(next.publicKey)];
+    const body = Buffer.from('{"toolkits":{}}');
+    for (const { privateKey } of [current, next]) {
+      const signature = sign(null, body, privateKey).toString('base64');
+      assert.equal(verifyFeed(body, signature, keys), true);
+    }
+  });
+
+  test('the keys the app trusts are Ed25519 public keys, never private', async () => {
+    const { createPublicKey } = await import('node:crypto');
+    assert.ok(feedPublicKeys.length > 0);
+    assert.equal(new Set(feedPublicKeys).size, feedPublicKeys.length);
+    for (const pem of feedPublicKeys) {
+      assert.doesNotMatch(pem, /PRIVATE/);
+      assert.equal(createPublicKey(pem).asymmetricKeyType, 'ed25519');
+    }
   });
 
   test('releases that could escape their folder or use http are left out', () => {

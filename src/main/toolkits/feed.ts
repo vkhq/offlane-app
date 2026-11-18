@@ -1,11 +1,10 @@
 // The toolkit feed: a JSON file of newer releases, signed with the
 // publisher's Ed25519 key, so toolkits can update without a new release of
-// the app. The app trusts it only if its signature checks out against the
-// public key below; a feed from anywhere else, or edited on the way, is
-// ignored and the pinned catalog stays in use.
+// the app. The app trusts it only if its signature checks out against one of
+// the public keys in ./trust.ts; a feed from anywhere else, or edited on the
+// way, is ignored and the pinned catalog stays in use.
 //
-// Off until a feed is published: set FEED to its address and the public key
-// that `npm run publish-toolkits` prints.
+// Off until a feed is published: set FEED_URL to its address.
 //
 // No Electron import.
 import { createPublicKey, verify } from 'node:crypto';
@@ -17,8 +16,16 @@ import type {
   ToolkitCheck,
   ToolkitRelease,
 } from './catalog';
+import { feedPublicKeys } from './trust';
 
-export const FEED: { url: string; publicKey: string } | null = null;
+/** Where the signed feed is: `<url>`, with its signature at `<url>.sig`. */
+export type FeedSource = { url: string; publicKeys: readonly string[] };
+
+const FEED_URL: string | null = null;
+
+export const FEED: FeedSource | null = FEED_URL
+  ? { url: FEED_URL, publicKeys: feedPublicKeys }
+  : null;
 
 const isText = (value: unknown, max = 2048): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -117,28 +124,27 @@ export function parseFeed(json: unknown): ReleaseOverlay {
   return overlay;
 }
 
-/** Whether `signature` (base64) is the key's signature of `body`. */
+/** Whether `signature` (base64) is one of the keys' signature of `body`.
+ *  A key that can't be read counts as not matching. */
 export function verifyFeed(
   body: Buffer,
   signature: string,
-  publicKey: string,
+  publicKeys: readonly string[],
 ): boolean {
-  try {
-    return verify(
-      null,
-      body,
-      createPublicKey(publicKey),
-      Buffer.from(signature.trim(), 'base64'),
-    );
-  } catch {
-    return false;
-  }
+  const bytes = Buffer.from(signature.trim(), 'base64');
+  return publicKeys.some((key) => {
+    try {
+      return verify(null, body, createPublicKey(key), bytes);
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Fetches the feed and its signature (`<url>.sig`); throws unless both
  *  arrive and the signature is good. */
 export async function fetchFeed(
-  feed: { url: string; publicKey: string },
+  feed: FeedSource,
   signal?: AbortSignal,
 ): Promise<ReleaseOverlay> {
   const [body, signature] = await Promise.all(
@@ -152,7 +158,7 @@ export async function fetchFeed(
       return Buffer.from(await response.arrayBuffer());
     }),
   );
-  if (!verifyFeed(body, signature.toString('utf8'), feed.publicKey)) {
+  if (!verifyFeed(body, signature.toString('utf8'), feed.publicKeys)) {
     throw new Error('The update list wasn’t signed by this app’s publisher.');
   }
   return parseFeed(JSON.parse(body.toString('utf8')));

@@ -57,7 +57,7 @@ if (args.includes('--keygen')) {
     { mode: 0o600 },
   );
   console.log(`Private key: ${file}  (keep it secret; not for the repo)`);
-  console.log('Public key, for FEED.publicKey in src/main/toolkits/feed.ts:');
+  console.log('Public key, for feedPublicKeys in src/main/toolkits/trust.ts:');
   console.log(publicKey.export({ type: 'spki', format: 'pem' }));
   process.exit(0);
 }
