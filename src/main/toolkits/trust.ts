@@ -20,4 +20,9 @@ export const feedPublicKeys: readonly string[] = [
   `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAAJM5LQqLQxx/RSHLwiEQiLC8USJXwoRkWnaQ+aXS8gE=
 -----END PUBLIC KEY-----`,
+  // Spare, created 2026-11-18. Kept offline only; signs nothing until the
+  // primary is retired or leaks.
+  `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEADFvODJmnuDyUSL3OEwmvStshkKXwaQ47WkpAHuJ73q0=
+-----END PUBLIC KEY-----`,
 ];
