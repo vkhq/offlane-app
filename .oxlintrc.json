@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["src/tools/*/*/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\./[^.]",
+                "message": "A tool never imports from another tool's folder. Move what they share into the toolkit."
+              },
+              {
+                "regex": "^(\\.\\./){3,}(renderer|main)/",
+                "message": "A tool imports the app through ../../ui (pages) or ../../backend (handlers)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/renderer/**", "src/main/**", "src/shared/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "/tools/[^/]+/[^/]+/",
+                "message": "The app finds tools through the registries, never by importing a tool's folder."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

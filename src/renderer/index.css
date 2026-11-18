@@ -1,0 +1,248 @@
+@import 'tailwindcss';
+
+:root {
+  /* The tab bar's wash, shared by the bar and a tab dragged across it. */
+  --tabbar-gradient: linear-gradient(
+    to right,
+    #c9533d,
+    #a84d86 35%,
+    #6b4cc0 70%,
+    #4a5bc6
+  );
+}
+
+@theme {
+  /* Noto Sans, from @fontsource-variable/noto-sans (imported in
+     index.tsx); the system fonts only stand in until it has loaded. */
+  --font-sans:
+    'Noto Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+
+  --font-serif: 'New York', ui-serif, 'Iowan Old Style', Georgia, serif;
+  /* History's feed, from @fontsource-variable/inter. */
+  --font-feed:
+    'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+
+  --color-canvas: #ffffff;
+  --color-panel: #ececec;
+  --color-inspector: #fafafa;
+  --color-group: #f1f1f1;
+  /* Settings groups, and the hairlines between their rows. */
+  --color-card: #f9f9f9;
+  --color-hairline: #eeeeee;
+  /* The Settings modal's column edge and search underline. */
+  --color-rule: #e8e8e8;
+  --color-field: #e6e6e6;
+  --color-field-strong: #d9d9d9;
+  --color-line: #dcdcdc;
+  --color-ink: #1d1d1f;
+  --color-ink-soft: #6e6e73;
+  --color-ink-faint: #a9a9ae;
+  /* History's feed: near-black titles, mid-grey details, blue headings,
+     and the hairline down the side and round each badge. */
+  --color-feed-ink: #111111;
+  --color-feed-meta: #9a9a9a;
+  --color-feed-heading: #3b62c9;
+  --color-feed-line: #e9e9e9;
+  --color-feed-ring: #e5e5e5;
+  --color-accent: #007aff;
+  --color-accent-ink: #ffffff;
+  --color-dash: #c5cee6;
+  --color-tabbar: #dfe2ea;
+  --color-popup: #eeedeb;
+  /* A pop-up menu's glass (see SelectMenu): a warm light grey, shown at
+     70% over a blur so what lies behind tints it, as macOS menus do. */
+  --color-menu: #ece9e4;
+  --color-brand: #e5432a;
+  --color-brand-soft: #fdebe7;
+  /* A tool page's workflow: the status pills on the links between its
+     steps, and the links themselves, the dark green of a success pill's
+     text. */
+  --color-flow: #6f5fe8;
+  --color-flow-soft: #efedfd;
+  --color-link: var(--color-green-900);
+  /* A tool page's field at rest and its options bar: an opaque grey, so
+     the canvas's dots don't show through. */
+  --color-well: #eeeef2;
+
+  /* Corners: the window frame (tab bar, sidebar) is flat and square. Content
+     uses three radii by size: rounded-lg (8px) for controls up to 32px tall,
+     rounded-xl (12px) for taller controls, fields and tiles, rounded-2xl
+     (16px) for large surfaces such as cards, the drop zone and popups.
+     Circles and pills stay rounded-full; a box nested in another takes the
+     outer radius less the gap between them. The home page's tool cards
+     are squircles instead (see the squircle utility). */
+
+  --shadow-float: 0 0 0 0.5px rgb(0 0 0 / 0.06), 0 2px 10px rgb(0 0 0 / 0.08);
+  --shadow-popup: 0 0 0 0.5px rgb(0 0 0 / 0.18), 0 18px 50px rgb(0 0 0 / 0.22);
+  /* A pop-up menu: a white rim inside, a dark hairline outside, then a
+     soft, wide lift. */
+  --shadow-menu:
+    inset 0 0 0 0.5px rgb(255 255 255 / 0.6), 0 0 0 0.5px rgb(0 0 0 / 0.16),
+    0 10px 30px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08);
+  --shadow-card: 0 0 0 0.5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.07);
+  /* A status pill on a workflow link: a hairline and a low lift off the
+     dotted canvas. */
+  --shadow-node:
+    0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04),
+    0 6px 16px rgb(0 0 0 / 0.04);
+  /* A home page tool card lifted under the pointer. A drop shadow, so it
+     follows the card's squircle mask, not a rounded box. */
+  --drop-shadow-card-hover: 0 12px 14px rgb(0 0 0 / 0.18);
+
+  /* The sidebar's tool panel fading its list in when it switches group. */
+  --animate-fade-in: fade-in 200ms ease-out;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /* A popover opening: fading in as it settles down from just above. */
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0, 0, 1);
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+  }
+
+  /* A workflow link drawing itself down to its length as it appears. */
+  --animate-grow-down: grow-down 150ms ease-out;
+
+  @keyframes grow-down {
+    from {
+      height: 0;
+    }
+  }
+}
+
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* What lies behind the sidebar where the window has no material of its own
+   (see html.vibrant below): a flat grey standing in for macOS's light
+   sidebar material, so the sidebar looks the same either way. */
+@utility sidebar-gradient {
+  background-color: #e3e4e2;
+}
+
+/* The tab bar's colours glowing through the top of the sidebar, across its
+   width, fading out towards its middle. */
+@utility sidebar-glow {
+  background-image: var(--tabbar-gradient);
+  background-size: 100vw 100%;
+  background-attachment: fixed;
+  opacity: 0.25;
+  mask-image: linear-gradient(
+    to bottom,
+    #000,
+    rgb(0 0 0 / 0.6) 20%,
+    rgb(0 0 0 / 0.25) 55%,
+    transparent
+  );
+}
+
+/* The sidebar itself, over the material and the tint (see AppShell): a
+   light veil, and a soft shade along the window's left edge that eases out over
+   the first 150px, as the reference's does. */
+@utility sidebar-glass {
+  background-color: rgb(255 255 255 / 0.2);
+  background-image: linear-gradient(
+    to right,
+    rgb(110 110 90 / 0.18) 0,
+    rgb(110 110 90 / 0.11) 12px,
+    rgb(110 110 90 / 0.07) 30px,
+    rgb(110 110 90 / 0.045) 45px,
+    rgb(110 110 90 / 0.026) 70px,
+    rgb(110 110 90 / 0.017) 100px,
+    rgb(110 110 90 / 0.008) 150px,
+    transparent 250px
+  );
+}
+
+/* A tab while it is dragged: white, lifted by a shadow, with a dashed
+   black edge. The edge is an outline, so the tab keeps its size. */
+@utility tab-dragging {
+  background-color: var(--color-canvas);
+  outline: 1px dashed rgb(0 0 0 / 0.45);
+  outline-offset: -1px;
+}
+
+/* Scrolls without showing a scrollbar; used by the home carousels. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* A squircle: a superellipse, |x|^5 + |y|^5 = 1, so its sides run straight
+   and ease into the corners instead of meeting a circular arc. A mask, not a
+   radius, so it clips every layer inside, and it stretches to the box, so
+   keep the box square. Generated by sampling the curve every 3 degrees. */
+@utility squircle {
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpath d='M100.00 50.00L99.97 65.36L99.89 70.26L99.75 73.81L99.56 76.68L99.31 79.12L99.01 81.26L98.64 83.17L98.22 84.89L97.74 86.46L97.20 87.89L96.60 89.21L95.94 90.43L95.20 91.54L94.40 92.58L93.53 93.53L92.58 94.40L91.54 95.20L90.43 95.94L89.21 96.60L87.89 97.20L86.46 97.74L84.89 98.22L83.17 98.64L81.26 99.01L79.12 99.31L76.68 99.56L73.81 99.75L70.26 99.89L65.36 99.97L50.00 100.00L34.64 99.97L29.74 99.89L26.19 99.75L23.32 99.56L20.88 99.31L18.74 99.01L16.83 98.64L15.11 98.22L13.54 97.74L12.11 97.20L10.79 96.60L9.57 95.94L8.46 95.20L7.42 94.40L6.47 93.53L5.60 92.58L4.80 91.54L4.06 90.43L3.40 89.21L2.80 87.89L2.26 86.46L1.78 84.89L1.36 83.17L0.99 81.26L0.69 79.12L0.44 76.68L0.25 73.81L0.11 70.26L0.03 65.36L0.00 50.00L0.03 34.64L0.11 29.74L0.25 26.19L0.44 23.32L0.69 20.88L0.99 18.74L1.36 16.83L1.78 15.11L2.26 13.54L2.80 12.11L3.40 10.79L4.06 9.57L4.80 8.46L5.60 7.42L6.47 6.47L7.42 5.60L8.46 4.80L9.57 4.06L10.79 3.40L12.11 2.80L13.54 2.26L15.11 1.78L16.83 1.36L18.74 0.99L20.88 0.69L23.32 0.44L26.19 0.25L29.74 0.11L34.64 0.03L50.00 0.00L65.36 0.03L70.26 0.11L73.81 0.25L76.68 0.44L79.12 0.69L81.26 0.99L83.17 1.36L84.89 1.78L86.46 2.26L87.89 2.80L89.21 3.40L90.43 4.06L91.54 4.80L92.58 5.60L93.53 6.47L94.40 7.42L95.20 8.46L95.94 9.57L96.60 10.79L97.20 12.11L97.74 13.54L98.22 15.11L98.64 16.83L99.01 18.74L99.31 20.88L99.56 23.32L99.75 26.19L99.89 29.74L99.97 34.64Z'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+
+/* A tool page's canvas: a fine dot grid, as in a workflow editor, over the
+   window's wash (see AppShell's page area). It scrolls with the steps. */
+@utility flow-canvas {
+  background-image: radial-gradient(#d6d6e0 1.1px, transparent 1.1px);
+  background-size: 20px 20px;
+  background-position: 10px 10px;
+}
+
+/* The solid, round-ended link between two workflow steps; give it a
+   height. */
+@utility flow-line {
+  width: 2px;
+  border-radius: 9999px;
+  background-color: var(--color-link);
+}
+
+/* Where a link leaves a step or a pill: a small hollow ring. */
+@utility flow-joint {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid var(--color-link);
+  background-color: var(--color-canvas);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background-color: #fff;
+}
+
+/* In the desktop app on macOS, the window's sidebar material, translucent
+   and blurring the desktop behind it, takes the place of the painted wash.
+   The page is clear down to it there; everything else stays opaque. */
+html.vibrant,
+html.vibrant body {
+  background-color: transparent;
+}
+
+html.vibrant .sidebar-gradient {
+  background: none;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  cursor: default;
+}

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stops a commit that would add a secret (API key, token, private key…).
+# Git runs this because `npm install` sets core.hooksPath to .githooks (see
+# the "prepare" script in package.json). To skip it once, for a false
+# alarm: git commit --no-verify. Better, mark the line with
+# `gitleaks:allow` or add its fingerprint to .gitleaksignore.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks isn't installed, so this commit wasn't checked for secrets." >&2
+  echo "Install it (macOS: brew install gitleaks; others: https://github.com/gitleaks/gitleaks#installing)," >&2
+  echo "or commit with --no-verify to skip the check." >&2
+  exit 1
+fi
+
+exec gitleaks git --pre-commit --staged --redact --no-banner --verbose
