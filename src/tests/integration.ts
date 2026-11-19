@@ -38,7 +38,13 @@ import { classifyError, reason } from '../main/engine/errors';
 import { toProbeResult } from '../main/engine/probe';
 import { parseLine, ProgressTracker } from '../main/engine/progress';
 import type { ToolkitRelease } from '../main/toolkits/catalog';
-import { parseFeed, verifyFeed } from '../main/toolkits/feed';
+import { FEED, parseFeed, verifyFeed } from '../main/toolkits/feed';
+import {
+  brand,
+  brandServers,
+  displayName,
+  officialBuild,
+} from '../shared/brand';
 import { feedPublicKeys } from '../main/toolkits/trust';
 import { ToolkitInstaller } from '../main/toolkits/installer';
 import { Toolkits } from '../main/toolkits/service';
@@ -1317,6 +1323,18 @@ describe('toolkit feed', () => {
       assert.doesNotMatch(pem, /PRIVATE/);
       assert.equal(createPublicKey(pem).asymmetricKeyType, 'ed25519');
     }
+  });
+
+  test('a build without the official flag is labelled and uses no Offlane servers', () => {
+    // The tests run outside webpack, like any build without
+    // OFFLANE_OFFICIAL_BUILD=1.
+    assert.equal(officialBuild, false);
+    assert.equal(displayName, `${brand.productName} (unofficial build)`);
+    assert.deepEqual(brandServers, {
+      updateFeedUrl: null,
+      toolkitFeedUrl: null,
+    });
+    assert.equal(FEED, null);
   });
 
   test('releases that could escape their folder or use http are left out', () => {

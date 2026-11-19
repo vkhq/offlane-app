@@ -7,6 +7,7 @@ import type {
   StorageReport,
 } from '../../shared/storage';
 import type { BrowserChoice, Settings } from '../../shared/types';
+import { brand, officialBuild } from '../../shared/brand';
 import { changelog } from '../changelog';
 import { formatBytes } from '../downloads';
 import { useToolkits } from '../toolkits';
@@ -21,6 +22,7 @@ import {
   ChevronRight,
   FileText,
   Folder,
+  Info,
   LayoutGrid,
   RefreshCw,
   Search,
@@ -102,6 +104,14 @@ const navSections: { title: string; groups: Group[] }[] = [
   {
     title: 'About',
     groups: [
+      {
+        id: 'about',
+        name: 'About Offlane',
+        icon: Info,
+        keywords:
+          'version website support email contact licence license gpl trademark source code',
+        content: () => <AboutOfflane />,
+      },
       {
         id: 'updates',
         name: 'Updates',
@@ -1011,6 +1021,77 @@ function Shortcuts() {
         </Section>
       ))}
     </>
+  );
+}
+
+/** A link that opens in the browser or mail app (see main/index.ts). */
+const ExternalLink = ({
+  href,
+  children,
+}: {
+  href: string;
+  children: ReactNode;
+}) => (
+  <a
+    href={href}
+    target="_blank"
+    rel="noreferrer"
+    className="truncate text-xs text-ink-soft underline-offset-2 hover:text-ink hover:underline"
+  >
+    {children}
+  </a>
+);
+
+function AboutOfflane() {
+  const version = useAppVersion();
+  const host = (url: string) => url.replace(/^https?:\/\/(www\.)?/, '');
+
+  return (
+    <Section
+      title={`${brand.productName}™${officialBuild ? '' : ' (unofficial build)'}`}
+      footer={
+        <Footnote>
+          {brand.productName} is free software under the GPL-3.0-or-later. The{' '}
+          {brand.productName} name and logo are trademarks; see{' '}
+          <a
+            href={brand.trademarkPolicy}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-ink"
+          >
+            TRADEMARKS.md
+          </a>
+          .
+        </Footnote>
+      }
+    >
+      <Row label="Version">
+        <Value>{version}</Value>
+      </Row>
+      <Row
+        label="Build"
+        note={
+          officialBuild
+            ? undefined
+            : 'Not built by Offlane. It gets no automatic updates from Offlane.'
+        }
+      >
+        <Value>{officialBuild ? 'Official' : 'Unofficial'}</Value>
+      </Row>
+      <Row label="Website">
+        <ExternalLink href={brand.website}>{host(brand.website)}</ExternalLink>
+      </Row>
+      <Row label="Support">
+        <ExternalLink href={`mailto:${brand.supportEmail}`}>
+          {brand.supportEmail}
+        </ExternalLink>
+      </Row>
+      <Row label="Source code">
+        <ExternalLink href={brand.sourceCode}>
+          {host(brand.sourceCode)}
+        </ExternalLink>
+      </Row>
+    </Section>
   );
 }
 

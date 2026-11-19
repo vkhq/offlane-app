@@ -1,0 +1,20 @@
+Offlane brand assets
+
+Copyright (c) 2026 Vikash Gupta. All rights reserved.
+
+The Offlane name, the Offlane logo and the app icons made from it (the files
+in assets/brand/) are not covered by the GNU General Public License that
+covers the rest of this repository.
+
+You may use them unchanged:
+
+- in official Offlane builds, distributed unmodified;
+- to refer to Offlane, for example in articles, reviews, tutorials and links.
+
+Any other use, including in a modified or forked version of Offlane, needs
+written permission. A fork must use its own name and icon.
+
+What is allowed, and what a fork must change, is set out in TRADEMARKS.md.
+
+Questions: offlaneapp@gmail.com, or open an issue at
+https://github.com/vkhq/offlane-app/issues.

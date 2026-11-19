@@ -256,6 +256,11 @@ export const Globe = makeIcon('Globe', {
   cut: 'M3.75 12h16.5M12 3.75C9.75 6.2 8.75 8.9 8.75 12s1 5.8 3.25 8.25M12 3.75c2.25 2.45 3.25 5.15 3.25 8.25s-1 5.8-3.25 8.25',
 });
 
+export const Info = makeIcon('Info', {
+  body: circle(12, 12, 8.5),
+  cut: 'M12 11.25v4.75M12 8h.01',
+});
+
 export const Link2 = makeIcon('Link2', {
   lines: 'M9 7H7.5a5 5 0 0 0 0 10H9m6-10h1.5a5 5 0 0 1 0 10H15m-6.5-5h7',
 });

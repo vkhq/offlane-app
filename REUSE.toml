@@ -1,0 +1,16 @@
+# Which licence covers which files, in the REUSE format (https://reuse.software).
+# Everything is GPL-3.0-or-later except the Offlane name, logo and icons in
+# assets/brand/, which are all rights reserved: forks must use their own.
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Vikash Gupta"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = "assets/brand/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Vikash Gupta"
+SPDX-License-Identifier = "LicenseRef-Offlane-Brand"

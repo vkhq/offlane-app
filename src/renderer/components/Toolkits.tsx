@@ -485,29 +485,15 @@ export function ToolkitSplash({ onDone }: { onDone: () => void }) {
 }
 
 /**
- * A quiet mark beside a tool whose toolkit isn't installed yet, on Home and
- * in the sidebar: the tool still opens, and its page offers the install.
- * `onImage` draws it as a white pill, for a tool's banner card.
+ * A quiet mark beside a tool whose toolkit isn't installed yet, in Home's
+ * list and the sidebar: the tool still opens, and its page offers the
+ * install. Home's banner cards show none.
  */
-export function ToolkitBadge({
-  tool,
-  onImage = false,
-}: {
-  tool: Tool;
-  onImage?: boolean;
-}) {
+export function ToolkitBadge({ tool }: { tool: Tool }) {
   const missing = useMissingToolkits(tool);
   if (!missing || missing.length === 0) return null;
   const text = needsText(missing);
-  return onImage ? (
-    <span
-      title={text}
-      className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-white/85 px-2 py-0.5 text-[11px] font-medium text-ink backdrop-blur"
-    >
-      <ArrowDownToLine size={11} />
-      Install
-    </span>
-  ) : (
+  return (
     <span title={text} className="ml-auto shrink-0 text-ink-faint">
       <ArrowDownToLine size={14} />
       <span className="sr-only">{text}</span>

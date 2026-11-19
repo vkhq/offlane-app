@@ -9,6 +9,7 @@
 // No Electron import.
 import { createPublicKey, verify } from 'node:crypto';
 
+import { brandServers } from '../../shared/brand';
 import { isToolkitId } from '../../shared/toolkits';
 import type {
   ReleaseOverlay,
@@ -21,7 +22,8 @@ import { feedPublicKeys } from './trust';
 /** Where the signed feed is: `<url>`, with its signature at `<url>.sig`. */
 export type FeedSource = { url: string; publicKeys: readonly string[] };
 
-const FEED_URL: string | null = null;
+// Official builds only (see shared/brand.ts).
+const FEED_URL = brandServers.toolkitFeedUrl;
 
 export const FEED: FeedSource | null = FEED_URL
   ? { url: FEED_URL, publicKeys: feedPublicKeys }

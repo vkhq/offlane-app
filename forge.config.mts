@@ -8,6 +8,7 @@ import { WebpackPlugin } from '@electron-forge/plugin-webpack';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+import { brand } from './src/shared/brand';
 import { contentSecurityPolicy } from './src/shared/csp';
 import { mainConfig } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
@@ -29,6 +30,11 @@ const notarize =
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    // Permanent once released: see src/shared/brand.ts.
+    appBundleId: brand.appBundleId,
+    // assets/brand/icon.icns on macOS, icon.ico on Windows; made from the
+    // logo by `npm run icons`.
+    icon: 'assets/brand/icon',
     // The GPL text travels with every build, at Resources/LICENSE (macOS)
     // or resources/LICENSE (Windows, Linux).
     extraResource: ['LICENSE'],
@@ -53,10 +59,15 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
+    new MakerSquirrel({
+      setupIcon: 'assets/brand/icon.ico',
+      // Shown in Windows' installed apps list; it must be a web address.
+      iconUrl:
+        'https://raw.githubusercontent.com/vkhq/offlane-app/main/assets/brand/icon.ico',
+    }),
     new MakerZIP({}, ['darwin']),
-    new MakerRpm({}),
-    new MakerDeb({}),
+    new MakerRpm({ options: { icon: 'assets/brand/icon.png' } }),
+    new MakerDeb({ options: { icon: 'assets/brand/icon.png' } }),
   ],
   plugins: [
     new AutoUnpackNativesPlugin({}),

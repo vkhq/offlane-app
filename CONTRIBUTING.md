@@ -13,5 +13,7 @@ Offlane is licensed under the [GNU General Public License v3.0 or later](LICENSE
 
 - `npm install` also turns on a pre-commit check that stops commits containing secrets. It needs [gitleaks](https://github.com/gitleaks/gitleaks#installing).
 - Run `npm run typecheck`, `npm run lint` and `npm run test:integration`, and make sure they pass.
+<!-- REUSE-IgnoreStart -->
 - Start new source files with `// SPDX-License-Identifier: GPL-3.0-or-later`.
+<!-- REUSE-IgnoreEnd -->
 - Don't add toolkit binaries, models or signing keys. Toolkits are built and published from [offlane-toolkits](https://github.com/vkhq/offlane-toolkits).

@@ -359,8 +359,6 @@ function ToolCard({ tool }: { tool: Tool }) {
           <div className="absolute inset-x-0 bottom-0 h-3/4 bg-linear-to-t from-black/80 via-black/50 to-transparent" />
         )}
 
-        <ToolkitBadge tool={tool} onImage />
-
         {/* Inset 20px: the squircle curves in past a 16px inset near its
             corners, which would clip the description. */}
         <div

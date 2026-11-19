@@ -34,7 +34,9 @@ if (existsSync(dir)) fail(`${dir} already exists.`);
 mkdirSync(dir, { recursive: true });
 
 // Every new source file says its licence; older files gain the line over time.
+// REUSE-IgnoreStart
 const spdx = '// SPDX-License-Identifier: GPL-3.0-or-later\n';
+// REUSE-IgnoreEnd
 const write = (file, text) => writeFileSync(path.join(dir, file), spdx + text);
 
 write(

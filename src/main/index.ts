@@ -18,6 +18,7 @@ import { rmSync, statSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
+import { brand, displayName } from '../shared/brand';
 import { contentSecurityPolicy } from '../shared/csp';
 
 import { IPC } from '../shared/ipc';
@@ -72,6 +73,23 @@ const userData = app.getPath('userData');
  * `npm run fetch-binaries`, as installed instead, so the tests need no
  * downloads.
  */
+/**
+ * The app icon in development, where Electron would show its own. Packaged
+ * builds carry the icon from assets/brand (see forge.config.mts).
+ */
+const devIcon = app.isPackaged
+  ? undefined
+  : path.join(
+      app.getAppPath(),
+      'assets',
+      'brand',
+      process.platform === 'darwin'
+        ? 'icon-macos.png'
+        : process.platform === 'win32'
+          ? 'icon.ico'
+          : 'icon.png',
+    );
+
 const useVendor = !app.isPackaged && process.env.OFFLANE_USE_VENDOR === '1';
 const vendorBin = path.join(app.getAppPath(), 'vendor', target, 'bin');
 const toolkitStore = new ToolkitStore(
@@ -223,7 +241,13 @@ const createWindow = (): void => {
     width: 1220,
     minHeight: 560,
     minWidth: 940,
+    // The page has no <title>, so this name stays: Window menu, Mission
+    // Control, the Windows taskbar. "Offlane (unofficial build)" unless
+    // this is an official build (see shared/brand.ts).
+    title: displayName,
     titleBarStyle: 'hiddenInset',
+    // macOS takes the Dock icon from the app instead (set when ready).
+    ...(devIcon && process.platform !== 'darwin' && { icon: devIcon }),
     // Centres the 14px lights in the 40px tab bar, level with the tabs.
     trafficLightPosition: { x: 20, y: 13 },
     // The sidebar's translucent, blurred material, as in Finder: macOS draws
@@ -268,7 +292,8 @@ const createWindow = (): void => {
     if (!url.startsWith(pageOrigin)) event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    // Web links open in the browser, and email links (About) in the mail app.
+    if (/^(https?:\/\/|mailto:)/.test(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   window.on('closed', () => {
@@ -334,8 +359,8 @@ function savedFiles(): string[] {
   });
 }
 
-// Electron's default bundle id, from the app's name.
-const bundleIds = [`com.electron.${app.getName().toLowerCase()}`];
+// The packaged app's bundle id (see shared/brand.ts).
+const bundleIds = [brand.appBundleId];
 const inventory = new StorageInventory({
   userData,
   home: homedir(),
@@ -432,6 +457,7 @@ app.on('second-instance', () => {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   if (hidden) app.dock?.hide();
+  else if (devIcon && process.platform === 'darwin') app.dock?.setIcon(devIcon);
   protocol.handle('app', serveRenderer);
   protocol.handle('media', (request) => player.handle(request));
   void player.clearCache();

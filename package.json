@@ -30,6 +30,7 @@
     "test:download:online": "node src/tests/e2e/download.mjs --online",
     "new-tool": "node scripts/new-tool.mjs",
     "banners": "node scripts/bake-banners.mjs",
+    "icons": "node scripts/make-icons.mjs",
     "prepare": "git config core.hooksPath .githooks || exit 0"
   },
   "devDependencies": {
