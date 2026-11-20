@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import type { Options } from '../../shared/tools';
 import { addActivity } from '../history';
-import type { SessionStatus } from '../../shared/types';
+import type { SavedFile, SessionStatus } from '../../shared/types';
 import { useSession } from '../sessions';
 import { useTabState } from '../tabState';
 import { CloudUpload, Link2, Mic } from '../components/icons';
@@ -15,12 +15,7 @@ import { isToolJobGone, noteToolJobs, useAllJobs, useConnected } from './jobs';
 import { LinkField } from './LinkField';
 import { invalidLink, toLink } from './links';
 import { OptionsBar, summarizeOptions } from './OptionsBar';
-import {
-  type RecordState,
-  Recorder,
-  formatClock,
-  useStopwatch,
-} from './Recorder';
+import { Recorder, formatClock, useRecording } from './Recorder';
 import { ToolLayout } from './ToolLayout';
 import type { ToolPage } from './types';
 import { useToolForm } from './useToolForm';
@@ -56,13 +51,17 @@ export function standardTool<O extends Options>(
     const { input, options, action } = config;
     const [values, setValue] = useToolForm(options);
     const [items, setItems] = useTabState<Item[]>('items', []);
+    /** The file picked for each file option, kept with the tab (sessions
+     *  save Files by reference). */
+    const [attachments, setAttachments] = useTabState<
+      Record<string, File | SavedFile>
+    >('attachments', {});
     const [link, setLink] = useTabState('link', '');
     const [notice, setNotice] = useTabState('notice', '');
-    const [recordState, setRecordState] = useState<RecordState>('idle');
     const [busy, setBusy] = useState(false);
     /** The runs started from this tab: the workflow's results. */
     const [own, setOwn] = useTabState<string[]>('jobs', []);
-    const seconds = useStopwatch(recordState === 'recording');
+    const recording = useRecording();
     const connected = useConnected(tool.id);
     const allJobs = useAllJobs();
     // How each of its runs stands, for History; one not yet heard of has
@@ -111,13 +110,18 @@ export function standardTool<O extends Options>(
         ? items.length > 0
         : input.kind === 'link'
           ? link.trim().length > 0
-          : recordState === 'done';
+          : recording.state === 'done' && recording.file !== null;
 
     const record = () =>
       addActivity(
         tool.id,
         input.kind === 'record'
-          ? [{ name: `Recording (${formatClock(seconds)})`, kind: 'recording' }]
+          ? [
+              {
+                name: `Recording (${formatClock(recording.seconds)})`,
+                kind: 'recording',
+              },
+            ]
           : input.kind === 'link'
             ? [{ name: link, kind: 'link' }]
             : items.map((item) =>
@@ -135,16 +139,22 @@ export function standardTool<O extends Options>(
           : items.filter((item) => typeof item === 'string');
       if (links.includes(null)) return setNotice(invalidLink);
       session.record();
-      if (!connected || input.kind === 'record') {
+      if (!connected) {
         setNotice(`${action} isn't connected yet.`);
         return record();
       }
       setBusy(true);
       try {
         const jobs = await window.tools.run(tool.id, {
-          files: items.filter((item) => typeof item !== 'string'),
+          files:
+            input.kind === 'record'
+              ? recording.file
+                ? [recording.file]
+                : []
+              : items.filter((item) => typeof item !== 'string'),
           links: links as string[],
           values,
+          attachments,
         });
         noteToolJobs(jobs);
         record();
@@ -161,9 +171,10 @@ export function standardTool<O extends Options>(
       session.reset();
       setItems([]);
       setLink('');
-      setRecordState('idle');
+      recording.reset();
       setNotice('');
       setOwn([]);
+      setAttachments({});
     };
 
     const step = inputSteps[input.kind];
@@ -217,14 +228,9 @@ export function standardTool<O extends Options>(
             />
           )}
           {input.kind === 'record' && (
-            <Recorder
-              input={input}
-              state={recordState}
-              seconds={seconds}
-              onChange={setRecordState}
-            />
+            <Recorder input={input} recording={recording} />
           )}
-          {!ready && <FlowNotice>{notice}</FlowNotice>}
+          {!ready && <FlowNotice>{notice || recording.error}</FlowNotice>}
         </FlowNode>
 
         {ready && (
@@ -235,6 +241,9 @@ export function standardTool<O extends Options>(
                 options={options}
                 values={values}
                 onChange={setValue}
+                onFile={(key, file) =>
+                  setAttachments((current) => ({ ...current, [key]: file }))
+                }
                 action={action}
                 busy={busy}
                 onRun={() => void run()}

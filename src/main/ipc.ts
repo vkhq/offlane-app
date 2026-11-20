@@ -38,6 +38,7 @@ import { fetchThumbnail } from './engine/thumbnail';
 import { resolveOutputs } from './tools/outputs';
 import type { SettingsStore } from './storage/settings';
 import type { ToolQueue } from './tools/queue';
+import type { Recordings } from './tools/recordings';
 import type { Toolkits } from './toolkits/service';
 import { ToolkitMissingError } from './toolkits/store';
 
@@ -51,6 +52,8 @@ export type IpcDeps = {
   previewFile: (file: string) => Promise<FilePreview>;
   /** Every other tool's jobs (see src/tools). */
   tools: ToolQueue;
+  /** Recordings made in the page, until a tool runs on them. */
+  recordings: Recordings;
   settings: SettingsStore;
   /** Installs, updates and removes toolkits (see toolkits/service.ts). */
   toolkits: Toolkits;
@@ -287,20 +290,37 @@ export function registerIpc(deps: IpcDeps): void {
       links,
       outputs,
       values,
+      attachments: attached = {},
     } = (request ?? {}) as Record<string, unknown>;
-    if (!isString(toolId, 128) || !Array.isArray(given) || !isStrings(links)) {
+    if (
+      !isString(toolId, 128) ||
+      !Array.isArray(given) ||
+      !isStrings(links) ||
+      typeof attached !== 'object' ||
+      attached === null ||
+      Array.isArray(attached)
+    ) {
       throw new Error('Invalid request');
     }
     // Each file is a path from the preload, or a saved session file's
     // token, whose path comes from our own records; order is kept.
-    const files = given.map((file: unknown) => {
+    const pathOf = (file: unknown) => {
       if (isString(file)) return file;
       const token = (file as { token?: unknown } | null)?.token;
       const found = isString(token, 64) ? deps.sessions.filePath(token) : null;
       if (!found) throw new Error('A saved file is no longer known.');
       return found;
-    });
+    };
+    const files = given.map(pathOf);
     if (files.length > 1000) throw new Error('Invalid request');
+    // The file chosen for each file option, the same way.
+    const entries = Object.entries(attached);
+    if (entries.length > 20 || !entries.every(([key]) => isString(key, 128))) {
+      throw new Error('Invalid request');
+    }
+    const attachments = Object.fromEntries(
+      entries.map(([key, file]) => [key, pathOf(file)]),
+    );
     // Earlier outputs, as in a chain of steps, come as references to the
     // jobs that wrote them; their paths come from our own records.
     const earlier = resolveOutputs(outputs, {
@@ -313,6 +333,7 @@ export function registerIpc(deps: IpcDeps): void {
       files: [...files, ...earlier],
       links,
       values,
+      attachments,
     });
   });
   handle(IPC.toolsList, () => deps.tools.list());
@@ -391,6 +412,22 @@ export function registerIpc(deps: IpcDeps): void {
       previews.set(token, pending);
     }
     return pending;
+  });
+  handle(IPC.toolsSaveRecording, (data: unknown, type: unknown) => {
+    const bytes =
+      data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : data instanceof Uint8Array
+          ? data
+          : null;
+    if (!bytes || !isString(type, 128)) throw new Error('Invalid recording');
+    const saved = deps.recordings.save(bytes, type);
+    // Registered like a dropped file, so `run` takes it by its token.
+    return deps.sessions.addFile(saved.path, {
+      name: saved.name,
+      size: bytes.byteLength,
+      type: saved.type,
+    });
   });
   handle(IPC.toolsCancel, (id: unknown) => deps.tools.cancel(assertId(id)));
   handle(IPC.toolsRemove, (id: unknown) => deps.tools.remove(assertId(id)));

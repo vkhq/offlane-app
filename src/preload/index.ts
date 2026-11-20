@@ -23,6 +23,7 @@ import type {
   Job,
   PlaybackProgress,
   ProbeResult,
+  SavedFile,
   SessionsApi,
 } from '../shared/types';
 
@@ -108,18 +109,23 @@ const tools: ToolsApi = {
   connected: () => call(IPC.toolsConnected),
   // A page cannot see where a file is on disk; only the preload can, and
   // only for files the user dropped or picked.
-  run: (toolId, { files, links, outputs = [], values }) =>
-    call(IPC.toolsRun, toolId, {
-      // A saved file goes by its token; the main process looks its path up.
-      files: files.map((file) =>
-        file instanceof File
-          ? webUtils.getPathForFile(file)
-          : { token: file.token },
-      ),
+  run: (toolId, { files, links, outputs = [], values, attachments = {} }) => {
+    // A saved file goes by its token; the main process looks its path up.
+    const pathOf = (file: File | SavedFile) =>
+      file instanceof File
+        ? webUtils.getPathForFile(file)
+        : { token: file.token };
+    return call(IPC.toolsRun, toolId, {
+      files: files.map(pathOf),
       links,
       outputs,
       values,
-    }),
+      attachments: Object.fromEntries(
+        Object.entries(attachments).map(([key, file]) => [key, pathOf(file)]),
+      ),
+    });
+  },
+  saveRecording: (data, type) => call(IPC.toolsSaveRecording, data, type),
   list: () => call(IPC.toolsList),
   cancel: (id) => call(IPC.toolsCancel, id),
   remove: (id) => call(IPC.toolsRemove, id),

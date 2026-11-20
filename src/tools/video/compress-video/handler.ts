@@ -1,7 +1,7 @@
 import {
   defineHandler,
   fileInput,
-  h264Encoder,
+  h264Args,
   probeMedia,
   runFfmpeg,
 } from '../../backend';
@@ -19,7 +19,6 @@ export default defineHandler({
   async run(context) {
     const { input, values } = context;
     const media = await probeMedia(context, input);
-    const encoder = await h264Encoder(context);
     const share = 0.15 + (values.quality / 100) * 0.5;
     const video = Math.max(
       200_000,
@@ -35,18 +34,7 @@ export default defineHandler({
         '0:v:0',
         '-map',
         '0:a:0?',
-        '-c:v',
-        encoder,
-        '-b:v',
-        String(video),
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-movflags',
-        '+faststart',
+        ...(await h264Args(context, video)),
         output,
       ],
       media.duration,

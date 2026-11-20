@@ -192,12 +192,25 @@ async function macFfmpeg(spec, binDir, versions) {
     await fs.copyFile(path.join(src, bin), path.join(binDir, bin));
     await chmodX(path.join(binDir, bin));
   }
-  for (const license of ['LICENSE.md', 'COPYING.LGPLv2.1']) {
-    if (existsSync(path.join(src, license))) {
+  // Every component's licence and the list of sources, already named
+  // (FFmpeg-LICENSE.md, libvpx-PATENTS, SOURCES.txt…). Builds from before
+  // the libraries were added have only FFmpeg's two, beside the binaries.
+  const licenses = path.join(src, 'licenses');
+  if (existsSync(licenses)) {
+    for (const name of await fs.readdir(licenses)) {
       await fs.copyFile(
-        path.join(src, license),
-        path.join(binDir, 'licenses', `FFmpeg-${license}`),
+        path.join(licenses, name),
+        path.join(binDir, 'licenses', name),
       );
+    }
+  } else {
+    for (const license of ['LICENSE.md', 'COPYING.LGPLv2.1']) {
+      if (existsSync(path.join(src, license))) {
+        await fs.copyFile(
+          path.join(src, license),
+          path.join(binDir, 'licenses', `FFmpeg-${license}`),
+        );
+      }
     }
   }
   const versionFile = path.join(src, 'version.txt');

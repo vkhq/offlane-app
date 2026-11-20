@@ -78,6 +78,7 @@ function StepCard({ step }: { step: Step }) {
           index,
         })),
         values,
+        attachments: step.attachments,
       });
       noteToolJobs(jobs);
       steps.update(step.id, {
@@ -145,6 +146,11 @@ function StepCard({ step }: { step: Step }) {
             onChange={(key, value) =>
               steps.update(step.id, {
                 values: { ...step.values, [key]: value },
+              })
+            }
+            onFile={(key, file) =>
+              steps.update(step.id, {
+                attachments: { ...step.attachments, [key]: file },
               })
             }
             action={config.action}

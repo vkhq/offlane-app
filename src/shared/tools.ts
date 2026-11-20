@@ -3,6 +3,13 @@
 // its handler to validate what the page sent, so the two cannot drift.
 // No Electron or React import: both processes use this file.
 
+/**
+ * When an option is shown: only while another option (by key) has one of
+ * these values. A hidden option is left out of the form and the summary,
+ * and its handler gets its default value.
+ */
+export type Condition = { option: string; is: SettingValue[] };
+
 export type SelectSetting = {
   kind: 'select';
   label: string;
@@ -31,7 +38,7 @@ export type PasswordSetting = {
 export type FileSetting = { kind: 'file'; label: string; accept: string };
 export type InfoSetting = { kind: 'info'; label: string; value: string };
 
-export type Setting =
+export type Setting = (
   | SelectSetting
   | ToggleSetting
   | NumberSetting
@@ -39,7 +46,8 @@ export type Setting =
   | TextSetting
   | PasswordSetting
   | FileSetting
-  | InfoSetting;
+  | InfoSetting
+) & { when?: Condition };
 
 export type SettingValue = string | number | boolean;
 
@@ -73,10 +81,28 @@ export const defaultValues = <O extends Options>(options: O) =>
     ]),
   ) as OptionValues<O>;
 
+/** Whether option `key` is shown, given the values chosen so far. */
+export function isShown(
+  options: Options,
+  key: string,
+  values: Record<string, unknown>,
+): boolean {
+  const when = options[key]?.when;
+  return !when || when.is.includes(values[when.option] as SettingValue);
+}
+
+/** `setting`, shown only while option `option` is one of `is`. */
+export const shownWhen = <S extends Setting>(
+  setting: S,
+  option: string,
+  is: SettingValue[],
+): S => ({ ...setting, when: { option, is } });
+
 /**
  * Checks values sent from the page against the options, treating them as
  * untrusted: unknown keys are dropped, a missing or wrong-typed value falls
- * back to the option's default, and a select only takes one of its options.
+ * back to the option's default, a select only takes one of its options, and
+ * a hidden option (see `Condition`) keeps its default.
  */
 export function parseValues<O extends Options>(
   options: O,
@@ -109,6 +135,10 @@ export function parseValues<O extends Options>(
         if (typeof value === 'string' && value.length <= 4096)
           values[key] = value;
     }
+  }
+  const defaults = defaultValues(options) as Record<string, SettingValue>;
+  for (const key of Object.keys(options)) {
+    if (!isShown(options, key, values)) values[key] = defaults[key];
   }
   return values as OptionValues<O>;
 }
@@ -251,8 +281,18 @@ export type ToolsApi = {
       /** Earlier outputs to work on, as in a chain of steps. */
       outputs?: OutputRef[];
       values: Record<string, unknown>;
+      /** The file chosen for each file option, by the option's key. */
+      attachments?: Record<string, File | import('./types').SavedFile>;
     },
   ) => Promise<ToolJob[]>;
+  /**
+   * Saves a recording made in the page (MediaRecorder's bytes and MIME
+   * type); the result goes to `run` as one of its files.
+   */
+  saveRecording: (
+    data: ArrayBuffer,
+    type: string,
+  ) => Promise<import('./types').SavedFile>;
   list: () => Promise<ToolJob[]>;
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;

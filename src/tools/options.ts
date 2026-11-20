@@ -11,6 +11,7 @@ export {
   password,
   quality,
   select,
+  shownWhen,
   text,
   timeRange,
   toggle,

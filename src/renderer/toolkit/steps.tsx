@@ -8,6 +8,7 @@ import {
 
 import type { FileKind } from '../../shared/fileKinds';
 import type { OutputRef, SettingValue } from '../../shared/tools';
+import type { SavedFile } from '../../shared/types';
 import { useTabState } from '../tabState';
 
 /** An earlier output a step works on, with what the page shows of it. */
@@ -22,6 +23,8 @@ export type Step = {
   toolId: string;
   inputs: StepInput[];
   values: Record<string, SettingValue>;
+  /** The file picked for each of its file options. */
+  attachments?: Record<string, File | SavedFile>;
   /** The jobs this step started, so it lists only its own results. */
   jobIds: string[];
 };

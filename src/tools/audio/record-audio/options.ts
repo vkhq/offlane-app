@@ -1,7 +1,11 @@
-import { defineOptions, select } from '../../options';
+import { defineOptions, select, shownWhen } from '../../options';
 
 export const options = defineOptions({
   input: select('Input', ['Default Microphone', 'System Audio']),
   format: select('Format', ['M4A', 'MP3', 'WAV']),
-  quality: select('Quality', ['High', 'Medium', 'Low']),
+  // WAV is lossless: a quality means nothing for it.
+  quality: shownWhen(select('Quality', ['High', 'Medium', 'Low']), 'format', [
+    'M4A',
+    'MP3',
+  ]),
 });

@@ -17,7 +17,9 @@ export { LinkField } from '../renderer/toolkit/LinkField';
 export {
   Recorder,
   type RecordState,
+  type Recording,
   formatClock,
+  useRecording,
   useStopwatch,
 } from '../renderer/toolkit/Recorder';
 export { OptionsBar, summarizeOptions } from '../renderer/toolkit/OptionsBar';

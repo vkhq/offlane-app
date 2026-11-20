@@ -9,5 +9,8 @@
   <true/>
   <key>com.apple.security.network.client</key>
   <true/>
+  <!-- Record Audio: the hardened runtime blocks the microphone without it. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
 </dict>
 </plist>

@@ -1,10 +1,11 @@
 import { Fragment, useRef } from 'react';
 
-import type {
-  OptionValues,
-  Options,
-  Setting,
-  SettingValue,
+import {
+  type OptionValues,
+  type Options,
+  type Setting,
+  type SettingValue,
+  isShown,
 } from '../../shared/tools';
 import { ArrowRight, Check, ChevronDown } from '../components/icons';
 import { SelectMenu } from './SelectMenu';
@@ -20,6 +21,7 @@ export function OptionsBar<O extends Options>({
   options,
   values,
   onChange,
+  onFile,
   action,
   onRun,
   busy = false,
@@ -28,13 +30,18 @@ export function OptionsBar<O extends Options>({
   options: O;
   values: OptionValues<O>;
   onChange: (key: keyof O & string, value: SettingValue) => void;
+  /** The file picked for a file option; its name goes to `onChange`. */
+  onFile?: (key: keyof O & string, file: File) => void;
   action: string;
   onRun: () => void;
   /** Holds the action while a run is starting. */
   busy?: boolean;
   disabled?: boolean;
 }) {
-  const entries = Object.entries(options);
+  // Only the options the choices made so far call for.
+  const entries = Object.entries(options).filter(([key]) =>
+    isShown(options, key, values),
+  );
   const run = (
     <button
       type="button"
@@ -64,6 +71,7 @@ export function OptionsBar<O extends Options>({
               value={values[key]}
               disabled={disabled}
               onChange={(value) => onChange(key, value)}
+              onFile={(file) => onFile?.(key, file)}
             />
           </Fragment>
         ))}
@@ -114,6 +122,7 @@ export function summarizeOptions<O extends Options>(
   values: OptionValues<O>,
 ) {
   return Object.entries(options)
+    .filter(([key]) => isShown(options, key, values))
     .map(([key, setting]) => summarize(setting, values[key]))
     .filter((part): part is string => Boolean(part));
 }
@@ -151,11 +160,13 @@ function Segment({
   value,
   disabled,
   onChange,
+  onFile,
 }: {
   setting: Setting;
   value: SettingValue;
   disabled: boolean;
   onChange: (value: SettingValue) => void;
+  onFile: (file: File) => void;
 }) {
   const picker = useRef<HTMLInputElement>(null);
 
@@ -259,7 +270,10 @@ function Segment({
             accept={setting.accept}
             onChange={(event) => {
               const chosen = event.target.files?.[0];
-              if (chosen) onChange(chosen.name);
+              if (chosen) {
+                onFile(chosen);
+                onChange(chosen.name);
+              }
               event.target.value = '';
             }}
           />

@@ -14,6 +14,9 @@ export type DropInput = {
   formats: string;
   /** Whether items can also be added by URL, not just as files. */
   links: boolean;
+  /** Whether the order matters (as for Merge): items can then be dragged,
+   *  or moved with Alt+↑ and Alt+↓, into place. */
+  ordered?: boolean;
 };
 
 export type LinkInput = {
@@ -44,3 +47,9 @@ export const dropImages = () =>
   drop('image', 'image/*', 'JPEG, PNG, WebP, HEIC and TIFF');
 export const dropPdfs = () => drop('pdf', 'application/pdf', 'PDF');
 export const dropFiles = () => drop('file', '*/*', 'any file type');
+
+/** `input`, with items that can be put in order (see DropInput.ordered). */
+export const ordered = (input: DropInput): DropInput => ({
+  ...input,
+  ordered: true,
+});

@@ -1,4 +1,10 @@
-import { type DragEvent, useId, useRef, useState } from 'react';
+import {
+  type DragEvent,
+  type KeyboardEvent,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 
 import type { SavedFile } from '../../shared/types';
 import { formatBytes } from '../downloads';
@@ -24,6 +30,37 @@ import { iconButton, row, rowLabel, smallButton, tile, zone } from './styles';
 /** Something to process: an uploaded or dropped file, or a link to one. */
 /** A file, a link, or a file saved with a session and opened again. */
 export type Item = File | string | SavedFile;
+
+/** The drag of a row being put in order, told apart from a file drop. */
+const rowDrag = 'application/x-offlane-row';
+
+/** Lasting keys for files, so a row keeps its focus when it moves. */
+const fileKeys = new WeakMap<object, string>();
+function keysOf(items: Item[]) {
+  const seen = new Map<string, number>();
+  return items.map((item) => {
+    if (typeof item !== 'string') {
+      let key = fileKeys.get(item);
+      if (!key) {
+        key = crypto.randomUUID();
+        fileKeys.set(item, key);
+      }
+      return key;
+    }
+    // The same link twice is two rows.
+    const count = (seen.get(item) ?? 0) + 1;
+    seen.set(item, count);
+    return `${item}#${count}`;
+  });
+}
+
+/** `items` with the one at `from` moved to `to`. */
+const moved = (items: Item[], from: number, to: number) => {
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+};
 
 export const kindIcons: Record<FileKind, AppIcon> = {
   video: Play,
@@ -57,7 +94,19 @@ export function DropZone({
   onNotice: (notice: string) => void;
 }) {
   const [over, setOver] = useState(false);
+  /** The row being dragged into place, and the row it would go to. */
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [target, setTarget] = useState<number | null>(null);
   const urlId = useId();
+  const keys = keysOf(items);
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= items.length || from === to) return;
+    onItemsChange(moved(items, from, to));
+  };
+  const endDrag = () => {
+    setDragging(null);
+    setTarget(null);
+  };
   const picker = useRef<HTMLInputElement>(null);
 
   const add = (added: Item[]) => {
@@ -78,6 +127,8 @@ export function DropZone({
   const drop = (event: DragEvent) => {
     event.preventDefault();
     setOver(false);
+    // A row put back in the list, not a file: nothing to add.
+    if (event.dataTransfer.types.includes(rowDrag)) return endDrag();
     const { files } = event.dataTransfer;
     // A link dragged from a browser arrives as text, not as a file.
     if (files.length > 0) add([...files]);
@@ -91,7 +142,7 @@ export function DropZone({
     <div
       onDragOver={(event) => {
         event.preventDefault();
-        setOver(true);
+        if (!event.dataTransfer.types.includes(rowDrag)) setOver(true);
       }}
       onDragLeave={() => setOver(false)}
       onDrop={drop}
@@ -141,8 +192,50 @@ export function DropZone({
             const isLink = typeof item === 'string';
             const Icon = isLink ? Link2 : kindIcons[input.files];
             const name = isLink ? item.replace(/^https?:\/\//, '') : item.name;
+            const reorder = input.ordered && items.length > 1;
             return (
-              <li key={`${name}-${index}`} className={row}>
+              <li
+                key={keys[index]}
+                className={`${row} rounded-lg ${
+                  reorder
+                    ? 'cursor-grab outline-none focus-visible:bg-ink/5'
+                    : ''
+                } ${dragging === index ? 'opacity-40' : ''} ${
+                  target === index && dragging !== index ? 'bg-ink/5' : ''
+                }`}
+                {...(reorder && {
+                  draggable: true,
+                  tabIndex: 0,
+                  title: 'Drag to reorder, or press Alt+↑ or Alt+↓',
+                  'aria-label': `${name}, ${index + 1} of ${items.length}`,
+                  onDragStart: (event: DragEvent) => {
+                    event.dataTransfer.setData(rowDrag, String(index));
+                    event.dataTransfer.effectAllowed = 'move';
+                    setDragging(index);
+                  },
+                  onDragOver: (event: DragEvent) => {
+                    if (!event.dataTransfer.types.includes(rowDrag)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    setTarget(index);
+                  },
+                  onDrop: (event: DragEvent) => {
+                    if (!event.dataTransfer.types.includes(rowDrag)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (dragging !== null) move(dragging, index);
+                    endDrag();
+                  },
+                  onDragEnd: endDrag,
+                  onKeyDown: (event: KeyboardEvent) => {
+                    if (!event.altKey) return;
+                    if (event.key === 'ArrowUp') move(index, index - 1);
+                    else if (event.key === 'ArrowDown') move(index, index + 1);
+                    else return;
+                    event.preventDefault();
+                  },
+                })}
+              >
                 <span className={tile}>
                   <Icon size={15} />
                 </span>

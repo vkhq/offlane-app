@@ -44,6 +44,7 @@ export const IPC = {
   toolsCancel: 'tools:cancel',
   toolsRemove: 'tools:remove',
   toolsReveal: 'tools:reveal',
+  toolsSaveRecording: 'tools:save-recording',
   sessionsSave: 'sessions:save',
   sessionsList: 'sessions:list',
   sessionsGet: 'sessions:get',

@@ -14,6 +14,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
 } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -58,11 +59,33 @@ import { StorageInventory } from '../main/storage/inventory';
 import { SessionStore } from '../main/storage/sessions';
 import { defaultSettings, mergeSettings } from '../main/storage/settings';
 import { type ToolHandler, ToolQueue } from '../main/tools/queue';
-import { defineOptions, quality, select, toggle } from '../shared/tools';
+import {
+  defineOptions,
+  file,
+  isShown,
+  parseValues,
+  quality,
+  select,
+  shownWhen,
+  toggle,
+} from '../shared/tools';
+import { options as convertAudioOptions } from '../tools/audio/convert-audio/options';
 import compressVideo from '../tools/video/compress-video/handler';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
 import { resolveOutputs } from '../main/tools/outputs';
+import { run as runProgram } from '../main/engine/runner';
+import { Recordings, recordingName } from '../main/tools/recordings';
+import {
+  type HandlerContext,
+  audioArgs,
+  audioFormats,
+  h264Args,
+  probeMedia,
+  timeRange,
+  videoArgs,
+  videoFormats,
+} from '../tools/backend';
 
 const target = `${{ darwin: 'mac', win32: 'win', linux: 'linux' }[process.platform as string]}-${process.arch}`;
 const bundledBinDir = path.resolve('vendor', target, 'bin');
@@ -485,7 +508,8 @@ describe('chaining tools', () => {
         if (!existsSync(path.join(dir, 'page.tsx'))) continue;
         const page = readFileSync(path.join(dir, 'page.tsx'), 'utf8');
         const manifest = readFileSync(path.join(dir, 'manifest.ts'), 'utf8');
-        const input = /input:\s*(drop\w*)\(([^)]*)\)/.exec(page);
+        // Allowing for a wrapper such as ordered(dropVideos()).
+        const input = /input:\s*(?:ordered\()?(drop\w*)\(([^)]*)\)/.exec(page);
         const declared = /accepts:\s*\[([^\]]*)\]/.exec(manifest);
         const accepts = declared
           ? [...declared[1].matchAll(/'(\w+)'/g)].map((match) => match[1])
@@ -1396,6 +1420,134 @@ describe('tool queue', () => {
 
   before(() => fs.mkdir(outDir(), { recursive: true }));
 
+  test('an option shown only for some choices', () => {
+    const options = defineOptions({
+      format: select('Format', ['MP3', 'WAV']),
+      bitrate: shownWhen(select('Bitrate', ['320', '128'], '128'), 'format', [
+        'MP3',
+      ]),
+    });
+    assert.ok(isShown(options, 'bitrate', { format: 'MP3' }));
+    assert.ok(!isShown(options, 'bitrate', { format: 'WAV' }));
+    assert.ok(isShown(options, 'format', {}));
+    // Shown, the value chosen counts; hidden, the handler gets the default.
+    assert.equal(
+      parseValues(options, { format: 'MP3', bitrate: '320' }).bitrate,
+      '320',
+    );
+    assert.equal(
+      parseValues(options, { format: 'WAV', bitrate: '320' }).bitrate,
+      '128',
+    );
+    // Convert Audio hides Bitrate for the lossless formats.
+    for (const [format, shown] of [
+      ['MP3', true],
+      ['M4A', true],
+      ['OGG', true],
+      ['WAV', false],
+      ['FLAC', false],
+    ] as const) {
+      assert.equal(
+        isShown(convertAudioOptions, 'bitrate', { format }),
+        shown,
+        format,
+      );
+    }
+  });
+
+  test('a file option reaches the handler as a checked path', async () => {
+    const options = defineOptions({
+      mode: select('Mode', ['With File', 'Without']),
+      audio: shownWhen(file('Audio', 'audio/*'), 'mode', ['With File']),
+    });
+    const seen: unknown[] = [];
+    const tools = queue({
+      attach: {
+        options,
+        run: async ({ values }) => void seen.push(values.audio),
+      },
+    });
+    const audio = path.join(tmp, 'media', 'clip.mp4');
+    const run = async (
+      values: Record<string, unknown>,
+      attachments?: Record<string, string>,
+    ) => {
+      const [job] = tools.run('attach', {
+        files: [clip()],
+        links: [],
+        values,
+        attachments,
+      });
+      return settled(tools, job.id);
+    };
+    // The path sent with it, not the name the page shows.
+    await run({ mode: 'With File', audio: 'clip.mp4' }, { audio });
+    // Nothing sent: empty, whatever the page put in the values.
+    await run({ mode: 'With File', audio: '/etc/passwd' });
+    // A hidden file option is empty even if a file came with it.
+    await run({ mode: 'Without' }, { audio });
+    assert.deepEqual(seen, [audio, '', '']);
+    // A file that isn't there starts nothing.
+    assert.throws(
+      () =>
+        tools.run('attach', {
+          files: [clip()],
+          links: [],
+          values: { mode: 'With File' },
+          attachments: { audio: path.join(tmp, 'missing.mp3') },
+        }),
+      /Can't read missing\.mp3/,
+    );
+  });
+
+  test('a tool that combines its inputs gets them in one job, in order', async () => {
+    const seen: string[][] = [];
+    const tools = queue({
+      join: {
+        options: {},
+        combines: true,
+        run: async ({ input, inputs, outputPath }) => {
+          seen.push(inputs);
+          assert.equal(input, inputs[0]);
+          await fs.writeFile(outputPath('-joined', 'txt'), inputs.join('\n'));
+        },
+      },
+      each: { options: {}, run: async ({ inputs }) => void seen.push(inputs) },
+    });
+    const second = path.join(tmp, 'media', 'big.mp4');
+    const jobs = tools.run('join', {
+      files: [second, clip()],
+      links: [],
+      values: {},
+    });
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].input, 'big.mp4 and 1 more');
+    assert.equal(
+      jobs[0].inputSize,
+      statSync(second).size + statSync(clip()).size,
+    );
+    const done = await settled(tools, jobs[0].id);
+    assert.equal(done.status, 'done', done.error ?? '');
+    // Named after the first input.
+    assert.deepEqual(done.outputs, ['big-joined.txt']);
+    assert.deepEqual(seen, [[second, clip()]]);
+    // The other tests here expect the output folder as they left it.
+    rmSync(path.join(outDir(), 'big-joined.txt'));
+    // Any other tool: one job per input, each with its own.
+    seen.length = 0;
+    const each = tools.run('each', {
+      files: [second, clip()],
+      links: [],
+      values: {},
+    });
+    assert.equal(each.length, 2);
+    await Promise.all(each.map((job) => settled(tools, job.id)));
+    assert.deepEqual(
+      seen.sort((a, b) => a[0].localeCompare(b[0])),
+      [[second], [clip()]],
+    );
+  });
+
   test('values are checked against the options', async () => {
     let seen: unknown;
     const tools = queue({
@@ -1512,6 +1664,502 @@ describe('tool queue', () => {
       assert.ok(statSync(output).size < statSync(clip()).size);
     },
   );
+
+  test(
+    'an HEVC video fails with a message that says why',
+    { skip: process.platform !== 'darwin' && 'macOS only' },
+    async () => {
+      // Made with macOS's own encoder; Offlane's FFmpeg can't decode it.
+      const hevc = path.join(tmp, 'iphone.mp4');
+      const made = spawnSync(path.join(bundledBinDir, 'ffmpeg'), [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=320x240:rate=25',
+        '-c:v',
+        'hevc_videotoolbox',
+        '-tag:v',
+        'hvc1',
+        hevc,
+      ]);
+      assert.equal(made.status, 0, String(made.stderr));
+      const tools = queue({ 'compress-video': compressVideo });
+      const [job] = tools.run('compress-video', {
+        files: [hevc],
+        links: [],
+        values: { quality: 50 },
+      });
+      const done = await settled(tools, job.id);
+      assert.equal(done.status, 'failed');
+      assert.equal(
+        done.error,
+        'This video is in HEVC (H.265), which Offlane can’t convert yet.',
+      );
+      // Its partial output was deleted.
+      assert.ok(
+        !readdirSync(outDir()).some((name) => name.startsWith('iphone')),
+      );
+    },
+  );
+});
+
+const vendorFfmpeg = path.join(
+  bundledBinDir,
+  process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
+);
+const vendorFfprobe = path.join(
+  bundledBinDir,
+  process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe',
+);
+
+/** Runs vendor/'s ffmpeg quietly; throws with its error output if it fails. */
+function ffmpegOk(args: string[]) {
+  const result = spawnSync(vendorFfmpeg, [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-nostdin',
+    '-y',
+    ...args,
+  ]);
+  assert.equal(result.status, 0, String(result.stderr));
+  return result.stdout;
+}
+
+/** A path as FFmpeg's filter syntax needs it: forward slashes, with `:`,
+ *  `'` and `\` escaped. */
+const filterPath = (file: string) =>
+  file.replaceAll('\\', '/').replace(/[:'\\]/g, '\\$&');
+
+// The encoders and filters the video and audio tools rely on, checked in
+// vendor/'s Media toolkit build: our own (scripts/build-ffmpeg-lgpl-mac.sh).
+// macOS only for now. Windows and Linux still use BtbN's builds, which have
+// an HEVC decoder, until our own build replaces them.
+describe(
+  'media toolkit features',
+  {
+    skip:
+      (process.platform !== 'darwin' && 'macOS only for now') ||
+      (!existsSync(vendorFfmpeg) && 'no vendor ffmpeg'),
+  },
+  () => {
+    test('is the LGPL build', () => {
+      const config = ffmpegOk(['-buildconf']).toString();
+      assert.doesNotMatch(config, /--enable-(gpl|nonfree)\b/);
+    });
+
+    // HEVC and its successor VVC are covered by patent pools, so Offlane
+    // ships no decoder or encoder of its own for them. The operating
+    // system's (VideoToolbox, Media Foundation) are the system's, not ours.
+    test('ships no HEVC or VVC decoder and no x265', () => {
+      const decoders = ffmpegOk(['-decoders']).toString();
+      assert.doesNotMatch(decoders, /^ V.{5} (hevc|vvc) /m);
+      const encoders = ffmpegOk(['-encoders']).toString();
+      assert.doesNotMatch(encoders, /libx265|libkvazaar|libvvenc/);
+    });
+
+    test(
+      "still reads an HEVC file's details (made by macOS's own encoder)",
+      { skip: process.platform !== 'darwin' && 'macOS only' },
+      () => {
+        const hevc = path.join(tmp, 'features-hevc.mp4');
+        ffmpegOk([
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=2:size=320x240:rate=25',
+          '-c:v',
+          'hevc_videotoolbox',
+          '-tag:v',
+          'hvc1',
+          hevc,
+        ]);
+        const probe = spawnSync(vendorFfprobe, [
+          '-v',
+          'error',
+          '-show_entries',
+          'stream=codec_name:format=duration',
+          '-of',
+          'default=noprint_wrappers=1',
+          hevc,
+        ]);
+        const details = probe.stdout.toString();
+        assert.match(details, /codec_name=hevc/);
+        const duration = Number(/duration=([\d.]+)/.exec(details)?.[1]);
+        assert.ok(Math.abs(duration - 2) < 0.2, details);
+        // Copying the stream needs no decoder, so Mute works on it.
+        ffmpegOk([
+          '-i',
+          hevc,
+          '-map',
+          '0:v',
+          '-c:v',
+          'copy',
+          '-an',
+          path.join(tmp, 'features-hevc-muted.mp4'),
+        ]);
+      },
+    );
+
+    const encoders: {
+      encoder: string;
+      codec: string;
+      file: string;
+      input: string[];
+      args: string[];
+      tools: string;
+    }[] = [
+      {
+        encoder: 'libmp3lame',
+        codec: 'mp3',
+        file: 'tone.mp3',
+        input: ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'],
+        args: ['-b:a', '128k'],
+        tools: 'MP3 in Convert, Extract, Trim and Record Audio',
+      },
+      {
+        encoder: 'libvorbis',
+        codec: 'vorbis',
+        file: 'tone.ogg',
+        input: ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'],
+        args: ['-b:a', '128k'],
+        tools: 'OGG in Convert, Extract and Trim Audio',
+      },
+      {
+        encoder: 'libopus',
+        codec: 'opus',
+        file: 'tone.webm',
+        input: ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'],
+        args: ['-b:a', '96k'],
+        tools: 'WebM audio in Convert Video',
+      },
+      {
+        encoder: 'libvpx-vp9',
+        codec: 'vp9',
+        file: 'bars.webm',
+        input: ['-f', 'lavfi', '-i', 'testsrc=duration=1:size=160x120:rate=10'],
+        args: ['-deadline', 'realtime', '-cpu-used', '8', '-b:v', '200k'],
+        tools: 'WebM video in Convert Video',
+      },
+    ];
+    for (const { encoder, codec, file, input, args, tools } of encoders) {
+      test(`encodes with ${encoder} (${tools})`, () => {
+        const output = path.join(tmp, `features-${file}`);
+        ffmpegOk([...input, '-c', encoder, ...args, output]);
+        const probe = spawnSync(vendorFfprobe, [
+          '-v',
+          'error',
+          '-show_entries',
+          'stream=codec_name',
+          '-of',
+          'csv=p=0',
+          output,
+        ]);
+        assert.equal(probe.stdout.toString().trim(), codec);
+      });
+    }
+
+    test('draws subtitles with libass (Burn In Subtitles)', async () => {
+      const srt = path.join(tmp, 'features-subtitles.srt');
+      await fs.writeFile(
+        srt,
+        '1\n00:00:00,000 --> 00:00:02,000\nHello from Offlane\n',
+      );
+      // One grey frame from a black picture, with and without the
+      // subtitle: only the subtitled one has light pixels.
+      const frame = (filter: string) =>
+        ffmpegOk([
+          '-f',
+          'lavfi',
+          '-i',
+          'color=black:size=320x240:duration=1',
+          '-vf',
+          `${filter}format=gray`,
+          '-frames:v',
+          '1',
+          '-f',
+          'rawvideo',
+          '-',
+        ]);
+      const plain = frame('');
+      const subtitled = frame(`subtitles=filename=${filterPath(srt)},`);
+      assert.equal(subtitled.length, 320 * 240);
+      assert.ok(plain.every((value) => value < 32));
+      assert.ok(
+        subtitled.filter((value) => value > 128).length > 100,
+        'the subtitle was drawn',
+      );
+    });
+  },
+);
+
+// The helpers handlers share (src/tools/backend.ts), on vendor/'s FFmpeg.
+describe(
+  'handler helpers',
+  {
+    skip:
+      (process.platform !== 'darwin' && 'macOS only for now') ||
+      (!existsSync(vendorFfmpeg) && 'no vendor ffmpeg'),
+  },
+  () => {
+    /** Just enough of a job's context for the helpers. */
+    const context = {
+      ffmpeg: () => ({ ffmpeg: vendorFfmpeg, ffprobe: vendorFfprobe }),
+      run: runProgram,
+      signal: new AbortController().signal,
+    } as unknown as HandlerContext<unknown>;
+    const helperFile = (name: string) => path.join(tmp, `helpers-${name}`);
+
+    before(() => {
+      // A landscape clip with sound, the same clip tagged as a portrait
+      // phone video, a silent clip, and an MP3 with cover art.
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=2:size=320x240:rate=30',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=2:sample_rate=48000',
+        '-c:v',
+        'mpeg4',
+        '-b:v',
+        '500k',
+        '-c:a',
+        'aac',
+        '-ac',
+        '2',
+        '-shortest',
+        helperFile('clip.mp4'),
+      ]);
+      ffmpegOk([
+        '-display_rotation',
+        '90',
+        '-i',
+        helperFile('clip.mp4'),
+        '-c',
+        'copy',
+        helperFile('portrait.mp4'),
+      ]);
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=160x120:rate=25',
+        '-c:v',
+        'mpeg4',
+        helperFile('silent.mp4'),
+      ]);
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=duration=1',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=red:size=64x64:duration=1',
+        '-map',
+        '0',
+        '-map',
+        '1',
+        '-frames:v',
+        '1',
+        '-c:a',
+        'libmp3lame',
+        '-c:v',
+        'mjpeg',
+        '-disposition:v',
+        'attached_pic',
+        helperFile('cover.mp3'),
+      ]);
+    });
+
+    test('probeMedia reads the streams', async () => {
+      const media = await probeMedia(context, helperFile('clip.mp4'));
+      assert.ok(Math.abs((media.duration ?? 0) - 2) < 0.1);
+      assert.equal(media.video?.codec, 'mpeg4');
+      assert.equal(media.video?.width, 320);
+      assert.equal(media.video?.height, 240);
+      assert.equal(media.video?.rotation, 0);
+      assert.equal(media.video?.fps, 30);
+      assert.ok((media.video?.bitrate ?? 0) > 100_000);
+      assert.equal(media.audio?.codec, 'aac');
+      assert.equal(media.audio?.sampleRate, 48000);
+      assert.equal(media.audio?.channels, 2);
+    });
+
+    test('probeMedia gives a phone video its size as seen', async () => {
+      const media = await probeMedia(context, helperFile('portrait.mp4'));
+      assert.equal(media.video?.rotation, 90);
+      assert.equal(media.video?.width, 240);
+      assert.equal(media.video?.height, 320);
+    });
+
+    test('probeMedia: no audio, and cover art is not a video', async () => {
+      const silent = await probeMedia(context, helperFile('silent.mp4'));
+      assert.equal(silent.audio, null);
+      assert.ok(silent.video);
+      const song = await probeMedia(context, helperFile('cover.mp3'));
+      assert.equal(song.video, null);
+      assert.equal(song.audio?.codec, 'mp3');
+    });
+
+    test("probeMedia says why it can't read a file", async () => {
+      await fs.writeFile(helperFile('not-media.mp4'), 'not a video');
+      await assert.rejects(probeMedia(context, helperFile('not-media.mp4')));
+    });
+
+    test('h264Args makes a playable H.264 MP4', async () => {
+      const output = helperFile('h264.mp4');
+      ffmpegOk([
+        '-i',
+        helperFile('clip.mp4'),
+        ...(await h264Args(context, 800_000)),
+        output,
+      ]);
+      const media = await probeMedia(context, output);
+      assert.equal(media.video?.codec, 'h264');
+      assert.equal(media.audio?.codec, 'aac');
+    });
+
+    test('audioArgs makes every audio format', async () => {
+      const codecs: Record<string, string> = {
+        MP3: 'mp3',
+        M4A: 'aac',
+        WAV: 'pcm_s16le',
+        FLAC: 'flac',
+        OGG: 'vorbis',
+      };
+      for (const format of audioFormats) {
+        const { ext, args } = await audioArgs(context, format, 128);
+        const output = helperFile(`audio.${ext}`);
+        ffmpegOk(['-i', helperFile('clip.mp4'), '-vn', ...args, output]);
+        const media = await probeMedia(context, output);
+        assert.equal(media.audio?.codec, codecs[format], format);
+      }
+      await assert.rejects(audioArgs(context, 'AIFF'), /can't make AIFF/);
+    });
+
+    test('videoArgs makes every video format', async () => {
+      const codecs: Record<string, [string, string]> = {
+        MP4: ['h264', 'aac'],
+        MOV: ['h264', 'aac'],
+        WebM: ['vp9', 'opus'],
+        MKV: ['mpeg4', 'aac'],
+        AVI: ['mpeg4', 'mp3'],
+      };
+      for (const format of videoFormats) {
+        const { ext, args } = await videoArgs(context, format, 500_000);
+        const output = helperFile(`video.${ext}`);
+        ffmpegOk(['-i', helperFile('clip.mp4'), ...args, output]);
+        const media = await probeMedia(context, output);
+        assert.deepEqual(
+          [media.video?.codec, media.audio?.codec],
+          codecs[format],
+          format,
+        );
+      }
+    });
+
+    test('timeRange keeps the part asked for', () => {
+      assert.deepEqual(timeRange({ start: 1, end: 3 }, 10), {
+        start: 1,
+        length: 2,
+        inputArgs: ['-ss', '1', '-t', '2'],
+      });
+      // End is capped at the length.
+      assert.equal(timeRange({ start: 4, end: 30 }, 10).length, 6);
+      assert.equal(timeRange({ start: 0, end: 5 }, null).length, 5);
+      assert.throws(
+        () => timeRange({ start: 3, end: 3 }, 10),
+        /End must be after Start/,
+      );
+      assert.throws(
+        () => timeRange({ start: -1, end: 3 }, 10),
+        /before the beginning/,
+      );
+      assert.throws(
+        () => timeRange({ start: 12, end: 20 }, 10),
+        /Start is after the end of the file, which is 10 s long/,
+      );
+    });
+
+    test('a timeRange cut is the right length', async () => {
+      const { inputArgs, length } = timeRange({ start: 0.5, end: 1.5 }, 2);
+      const output = helperFile('cut.mp4');
+      ffmpegOk([
+        ...inputArgs,
+        '-i',
+        helperFile('clip.mp4'),
+        ...(await h264Args(context, 500_000)),
+        output,
+      ]);
+      const media = await probeMedia(context, output);
+      assert.ok(
+        Math.abs((media.duration ?? 0) - length) < 0.1,
+        String(media.duration),
+      );
+    });
+  },
+);
+
+describe('recordings', () => {
+  test('a recording is saved under a name a person reads', () => {
+    const dir = path.join(tmp, 'recordings');
+    const recordings = new Recordings(dir);
+    const when = new Date(2026, 10, 20, 9, 5, 7);
+    assert.equal(recordingName(when), 'Recording 2026-11-20 at 09.05.07');
+    const saved = recordings.save(
+      new Uint8Array([1, 2, 3]),
+      'audio/webm;codecs=opus',
+      when,
+    );
+    assert.equal(saved.name, 'Recording 2026-11-20 at 09.05.07.webm');
+    assert.equal(saved.type, 'audio/webm');
+    assert.equal(path.basename(saved.path), saved.name);
+    assert.deepEqual([...readFileSync(saved.path)], [1, 2, 3]);
+    // Two at the same second don't collide: each has its own folder.
+    const again = recordings.save(new Uint8Array([4]), 'audio/mp4', when);
+    assert.ok(again.name.endsWith('.m4a'));
+    assert.notEqual(path.dirname(again.path), path.dirname(saved.path));
+  });
+
+  test('only audio recordings, and not empty ones', () => {
+    const recordings = new Recordings(path.join(tmp, 'recordings-bad'));
+    assert.throws(
+      () => recordings.save(new Uint8Array([1]), 'video/webm'),
+      /can't save that kind/,
+    );
+    assert.throws(
+      () => recordings.save(new Uint8Array([1]), 'text/html'),
+      /can't save that kind/,
+    );
+    assert.throws(
+      () => recordings.save(new Uint8Array(), 'audio/webm'),
+      /empty/,
+    );
+  });
+
+  test('old recordings are swept away', () => {
+    const dir = path.join(tmp, 'recordings-sweep');
+    const recordings = new Recordings(dir);
+    const old = recordings.save(new Uint8Array([1]), 'audio/webm');
+    const fresh = recordings.save(new Uint8Array([1]), 'audio/webm');
+    // A day and a bit later, both are gone; one just made is kept.
+    recordings.sweep(24 * 60 * 60 * 1000, Date.now() + 25 * 60 * 60 * 1000);
+    assert.ok(!existsSync(old.path) && !existsSync(fresh.path));
+    const kept = recordings.save(new Uint8Array([1]), 'audio/webm');
+    recordings.sweep();
+    assert.ok(existsSync(kept.path));
+    // Sweeping a folder that isn't there yet is fine.
+    new Recordings(path.join(tmp, 'never-made')).sweep();
+  });
 });
 
 describe('sessions', () => {

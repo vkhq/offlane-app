@@ -35,6 +35,12 @@ const config: ForgeConfig = {
     // assets/brand/icon.icns on macOS, icon.ico on Windows; made from the
     // logo by `npm run icons`.
     icon: 'assets/brand/icon',
+    // macOS asks the person before Record Audio can use the microphone,
+    // showing this reason; without it the app can't ask at all.
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        'Offlane records from your microphone when you use Record Audio.',
+    },
     // The GPL text travels with every build, at Resources/LICENSE (macOS)
     // or resources/LICENSE (Windows, Linux).
     extraResource: ['LICENSE'],

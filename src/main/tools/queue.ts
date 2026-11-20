@@ -1,4 +1,5 @@
-// Runs tools' handlers: one job per input file or link, a few at a time.
+// Runs tools' handlers: one job per input file or link (or one for all of
+// them, for a tool that combines its inputs), a few at a time.
 // Each job gets a context with what it needs (its input, its checked option
 // values, FFmpeg, a place for its output and a way to report progress), so a
 // handler is only the work itself. A job that fails or is cancelled has its
@@ -14,6 +15,7 @@ import {
   type OptionValues,
   type Options,
   type ToolJob,
+  isShown,
   parseValues,
 } from '../../shared/tools';
 import { validateUrl } from '../engine/args';
@@ -24,8 +26,11 @@ import type { ResolvedFfmpeg } from '../engine/binaries';
 import { ToolkitMissingError } from '../toolkits/store';
 
 export type HandlerContext<V> = {
-  /** An absolute file path, or an http(s) link. */
+  /** An absolute file path, or an http(s) link: the first of `inputs`. */
   input: string;
+  /** Every input of this job, in the order given: just `input`, unless the
+   *  handler `combines` its inputs. */
+  inputs: string[];
   values: V;
   /** Aborted when the job is cancelled; pass it to `run`. */
   signal: AbortSignal;
@@ -49,6 +54,9 @@ export type ToolHandler<O extends Options = Options> = {
   options: O;
   /** What the tool works on. Files by default. */
   accepts?: 'files' | 'links' | 'both';
+  /** Takes all its inputs in one job, in order (as Merge does), instead of
+   *  one job each. */
+  combines?: boolean;
   run: (context: HandlerContext<OptionValues<O>>) => Promise<void>;
 };
 
@@ -67,8 +75,8 @@ export type QueueDeps = {
 
 type Entry = {
   job: ToolJob;
-  /** The full path or link, which the page never sees. */
-  input: string;
+  /** The full paths or links, which the page never sees. */
+  inputs: string[];
   handler: ToolHandler;
   values: OptionValues<Options>;
   controller: AbortController;
@@ -105,11 +113,18 @@ export class ToolQueue extends EventEmitter<{
   /**
    * Starts one job per input. Everything is checked first, so a bad input
    * starts nothing: files must exist, links must be http(s), and the tool
-   * must take that kind of input.
+   * must take that kind of input. A file option's value is the path of the
+   * file sent for it in `attachments` (checked the same way), or '' if none
+   * was: never what the page put in `values`.
    */
   run(
     toolId: string,
-    request: { files: string[]; links: string[]; values: unknown },
+    request: {
+      files: string[];
+      links: string[];
+      values: unknown;
+      attachments?: Record<string, string>;
+    },
   ): ToolJob[] {
     const handler = this.deps.handlers.get(toolId);
     if (!handler) throw new Error(`This tool isn't connected yet.`);
@@ -122,23 +137,50 @@ export class ToolQueue extends EventEmitter<{
     if (request.links.length > 0 && accepts === 'files') {
       throw new Error('This tool works on files, not links.');
     }
-    const files = request.files.map((file) => {
+    const checkFile = (file: string) => {
       if (!path.isAbsolute(file) || !isFile(file)) {
         throw new Error(`Can't read ${path.basename(file) || 'that file'}.`);
       }
       return file;
-    });
+    };
+    const files = request.files.map(checkFile);
     const links = request.links.map(validateUrl);
     const inputs = [...files, ...links];
     if (inputs.length === 0) throw new Error('Nothing to work on.');
-    const values = parseValues(handler.options, request.values);
+    const values = parseValues(handler.options, request.values) as Record<
+      string,
+      unknown
+    >;
+    for (const [key, setting] of Object.entries(handler.options)) {
+      if (setting.kind !== 'file') continue;
+      const attached = request.attachments?.[key];
+      values[key] =
+        attached && isShown(handler.options, key, values)
+          ? checkFile(attached)
+          : '';
+    }
 
-    const jobs = inputs.map((input): ToolJob => {
+    const groups = handler.combines ? [inputs] : inputs.map((one) => [one]);
+    const jobs = groups.map((group): ToolJob => {
+      const names = group.map((input) =>
+        files.includes(input) ? path.basename(input) : input,
+      );
+      const sizes = group.map((input) =>
+        files.includes(input) ? sizeOf(input) : undefined,
+      );
       const job: ToolJob = {
         id: randomUUID(),
         toolId,
-        input: files.includes(input) ? path.basename(input) : input,
-        ...(files.includes(input) && { inputSize: sizeOf(input) }),
+        input:
+          names.length > 1
+            ? `${names[0]} and ${names.length - 1} more`
+            : names[0],
+        ...(sizes.every((size) => size !== undefined) && {
+          inputSize: sizes.reduce<number>(
+            (total, size) => total + (size ?? 0),
+            0,
+          ),
+        }),
         status: 'queued',
         progress: null,
         outputs: [],
@@ -146,9 +188,9 @@ export class ToolQueue extends EventEmitter<{
       };
       this.entries.set(job.id, {
         job,
-        input,
+        inputs: group,
         handler,
-        values,
+        values: values as OptionValues<Options>,
         controller: new AbortController(),
         outputs: [],
       });
@@ -205,11 +247,12 @@ export class ToolQueue extends EventEmitter<{
 
   private async start(entry: Entry) {
     this.update(entry, { status: 'running', progress: null });
-    const { input } = entry;
+    const [input] = entry.inputs;
     const name = baseName(input);
     let lastProgress = 0;
     const context: HandlerContext<OptionValues<Options>> = {
       input,
+      inputs: [...entry.inputs],
       values: entry.values,
       signal: entry.controller.signal,
       progress: (percent) => {

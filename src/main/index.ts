@@ -11,11 +11,12 @@ import {
   net,
   protocol,
   session,
+  systemPreferences,
 } from 'electron';
 import started from 'electron-squirrel-startup';
 import { execFileSync } from 'node:child_process';
 import { rmSync, statSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 import { brand, displayName } from '../shared/brand';
@@ -36,6 +37,7 @@ import { StorageInventory } from './storage/inventory';
 import { SessionStore } from './storage/sessions';
 import { SettingsStore } from './storage/settings';
 import { ToolQueue } from './tools/queue';
+import { Recordings } from './tools/recordings';
 import { loadHandlers, loadRequirements } from './tools/registry';
 import { currentTarget } from './toolkits/catalog';
 import { FEED } from './toolkits/feed';
@@ -233,6 +235,37 @@ nativeTheme.themeSource = 'light';
  * it. Development builds only, when OFFLANE_HIDDEN is 1.
  */
 const hidden = !app.isPackaged && process.env.OFFLANE_HIDDEN === '1';
+
+/**
+ * Media permissions: our page may use the microphone (Record Audio) and
+ * nothing else, never the camera; and on macOS only once the person has
+ * let Offlane use it, asked the first time. Every other permission keeps
+ * Electron's default.
+ */
+function allowMicrophoneOnly() {
+  session.defaultSession.setPermissionRequestHandler(
+    (_contents, permission, callback, details) => {
+      if (permission !== 'media') return callback(true);
+      const types = 'mediaTypes' in details ? (details.mediaTypes ?? []) : [];
+      if (
+        !details.requestingUrl.startsWith(pageOrigin) ||
+        types.length === 0 ||
+        types.some((type) => type !== 'audio')
+      ) {
+        return callback(false);
+      }
+      if (
+        process.platform !== 'darwin' ||
+        systemPreferences.getMediaAccessStatus('microphone') === 'granted'
+      ) {
+        return callback(true);
+      }
+      systemPreferences
+        .askForMediaAccess('microphone')
+        .then(callback, () => callback(false));
+    },
+  );
+}
 
 const createWindow = (): void => {
   // Create the browser window.
@@ -432,10 +465,15 @@ const inventory = new StorageInventory({
   },
 });
 
+/** Recordings made in the page, kept in the system's temporary folder
+ *  until a tool has run on them (see tools/recordings.ts). */
+const recordings = new Recordings(path.join(tmpdir(), 'offlane-recordings'));
+
 registerIpc({
   manager,
   player,
   sessions,
+  recordings,
   previewFile: (file) => previewFile(ffmpegTools(), file),
   tools,
   settings,
@@ -461,8 +499,10 @@ app.whenReady().then(() => {
   protocol.handle('app', serveRenderer);
   protocol.handle('media', (request) => player.handle(request));
   void player.clearCache();
+  allowMicrophoneOnly();
   createWindow();
   manager.start();
+  recordings.sweep();
   // Older sessions' History pictures, made again once at the larger size.
   void refreshThumbnails({
     sessions,

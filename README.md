@@ -26,21 +26,21 @@ Offlane brings nearly forty small tools together in one window: compress a video
 
 - **Works on your computer.** Files are processed locally, with no account and no uploads.
 - **One window, many tools.** Video, audio, images, PDF, text and file tools, each with a short, focused page.
-- **Tools chain together.** When a tool finishes, *What's Next?* offers every tool that accepts its result, so compress → trim → GIF happens on one page.
+- **Tools chain together.** When a tool finishes, _What's Next?_ offers every tool that accepts its result, so compress → trim → GIF happens on one page.
 - **Tabs and history.** Work in several tabs at once; History reopens any past session exactly as it was.
 - **Toolkits on demand.** Heavier programs such as FFmpeg are downloaded only when a tool needs them, from builds published with their full source in [offlane-toolkits](https://github.com/vkhq/offlane-toolkits).
 - **Free software.** Licensed under the GPL-3.0-or-later.
 
 ## Tools
 
-| Group | Tools |
-| --- | --- |
-| Video | **Compress Video** ✓, Convert, Trim, Resize, Crop & Rotate, Change Speed, Merge, Mute, Replace Audio, Burn In Subtitles, Video to GIF |
-| Audio | Convert, Trim, Clean Up, Record, Extract Audio |
-| Images | Compress, Convert, Resize, Rotate, Remove Metadata, Remove Background |
-| PDF | Merge, Split, Compress, Organize, Delete Pages, Extract Pages, PDF to Images, Images to PDF, Add Password, Remove Password, Sign |
-| Text | Transcribe, Extract Text, Summarize, Translate |
-| Files | Batch Rename |
+| Group  | Tools                                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Video  | **Compress Video** ✓, Convert, Trim, Resize, Crop & Rotate, Change Speed, Merge, Mute, Replace Audio, Burn In Subtitles, Video to GIF |
+| Audio  | Convert, Trim, Clean Up, Record, Extract Audio                                                                                        |
+| Images | Compress, Convert, Resize, Rotate, Remove Metadata, Remove Background                                                                 |
+| PDF    | Merge, Split, Compress, Organize, Delete Pages, Extract Pages, PDF to Images, Images to PDF, Add Password, Remove Password, Sign      |
+| Text   | Transcribe, Extract Text, Summarize, Translate                                                                                        |
+| Files  | Batch Rename                                                                                                                          |
 
 ✓ = working now. The rest are coming.
 
@@ -55,15 +55,15 @@ npm install
 npm start
 ```
 
-| Command | What it does |
-| --- | --- |
-| `npm start` | Runs the app in development |
-| `npm run package` | Builds the app for your platform into `out/` |
-| `npm run make` | Builds installers (ZIP on macOS, Squirrel on Windows, deb and rpm on Linux) |
-| `npm run typecheck` / `npm run lint` | Checks types, lint and formatting |
-| `npm run test:integration` | Runs the integration tests |
-| `npm run new-tool -- <group> <id> "<Name>"` | Starts a new tool (see [src/tools/README.md](src/tools/README.md)) |
-| `npm run banners` / `npm run icons` | Rebuilds the Home card images and the app icons |
+| Command                                     | What it does                                                                |
+| ------------------------------------------- | --------------------------------------------------------------------------- |
+| `npm start`                                 | Runs the app in development                                                 |
+| `npm run package`                           | Builds the app for your platform into `out/`                                |
+| `npm run make`                              | Builds installers (ZIP on macOS, Squirrel on Windows, deb and rpm on Linux) |
+| `npm run typecheck` / `npm run lint`        | Checks types, lint and formatting                                           |
+| `npm run test:integration`                  | Runs the integration tests                                                  |
+| `npm run new-tool -- <group> <id> "<Name>"` | Starts a new tool (see [src/tools/README.md](src/tools/README.md))          |
+| `npm run banners` / `npm run icons`         | Rebuilds the Home card images and the app icons                             |
 
 A build you make yourself is not signed and has no auto-update. The tests are described in [src/tests/README.md](src/tests/README.md).
 
