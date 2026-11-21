@@ -1,15 +1,16 @@
-import { type ReactNode, useRef } from 'react';
+import type { ReactNode } from 'react';
 
-import { useTabScroll } from '../tabState';
-import { StepList } from './StepCard';
+import { Canvas } from './Canvas';
+import { Branches } from './StepCard';
 import { StepsProvider } from './steps';
 import type { Tool } from './types';
 
 /**
- * The frame every tool page sits in: its title and description over a dotted
- * canvas, then the page's workflow (FlowNode steps joined by FlowLinks) in a
- * column down it. Steps chained from the page's results follow, one after
- * another.
+ * The frame every tool page sits in: a canvas (see Canvas.tsx) with the
+ * page's first stage on it, its title and description over its workflow
+ * (FlowNode steps joined by FlowLinks) in a column. The tools its results
+ * go on to branch out below it, side by side, and theirs below them; once
+ * they are wider or taller than the window, the canvas pans.
  */
 export function ToolLayout({
   tool,
@@ -18,33 +19,26 @@ export function ToolLayout({
   tool: Tool;
   children: ReactNode;
 }) {
-  const scroller = useRef<HTMLDivElement>(null);
-  useTabScroll(scroller);
-
   return (
     <main className="relative flex min-w-0 flex-1 flex-col">
-      <div ref={scroller} className="relative flex-1 overflow-y-auto">
-        <div className="flow-canvas min-h-full">
-          {/* The title starts about a fifth of the way down, so a page with
-              only its first step sits nearer the middle than the top. */}
-          <div className="mx-auto flex w-full max-w-144 flex-col items-center px-6 pt-[max(3rem,18vh)] pb-24">
-            <div className="pb-6 text-center">
-              <h1 className="font-serif text-[26px] leading-tight font-bold">
-                {tool.name}
-              </h1>
-              <p className="pt-1 text-[13px] text-ink-soft">
-                {tool.description}
-              </p>
-            </div>
-            <StepsProvider>
-              <div className="flex w-full flex-col">
-                {children}
-                <StepList />
+      <StepsProvider>
+        <Canvas>
+          <div className="flex flex-col items-center">
+            <div className="flex w-132 flex-col">
+              <div className="pb-6 text-center">
+                <h1 className="font-serif text-[26px] leading-tight font-bold">
+                  {tool.name}
+                </h1>
+                <p className="pt-1 text-[13px] text-ink-soft">
+                  {tool.description}
+                </p>
               </div>
-            </StepsProvider>
+              {children}
+            </div>
+            <Branches parent={null} />
           </div>
-        </div>
-      </div>
+        </Canvas>
+      </StepsProvider>
     </main>
   );
 }

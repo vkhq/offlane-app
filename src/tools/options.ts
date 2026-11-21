@@ -19,3 +19,6 @@ export {
   type OptionValues,
   type Options,
 } from '../shared/tools';
+
+// Language codes as names ("es" → "Spanish"), for tracks offered by language.
+export { languageName, sameLanguage } from '../shared/languages';

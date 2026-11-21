@@ -15,6 +15,9 @@ export type SelectSetting = {
   label: string;
   options: string[];
   value: string;
+  /** The choice as a summary says it, when the value alone wouldn't say
+   *  what it is ("English" → "English audio"); null leaves it out. */
+  summary?: (value: string) => string | null;
 };
 export type ToggleSetting = { kind: 'toggle'; label: string; value: boolean };
 export type NumberSetting = {
@@ -261,6 +264,8 @@ export type ToolJob = {
   inputSize?: number;
   /** Once done, the size of what it wrote, all its files together. */
   outputSize?: number;
+  /** Once done, anything the person should know about the result. */
+  note?: string;
   error?: string;
   createdAt: number;
 };
@@ -297,6 +302,21 @@ export type ToolsApi = {
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   reveal: (id: string) => Promise<void>;
+  /** Opens a finished job's output in the computer's own app for it. */
+  open: (id: string) => Promise<void>;
+  /** A frame of a finished job's video output, and its length; nothing
+   *  for one that isn't a video, or can't be read. */
+  preview: (id: string) => Promise<import('./types').FilePreview>;
+  /** Readies a finished job's output to play in the app, with audio
+   *  track `audioTrack` (the first by default). */
+  preparePlayback: (
+    id: string,
+    audioTrack?: number,
+  ) => Promise<import('./types').PlaybackSource>;
+  cancelPlayback: (id: string) => Promise<void>;
+  onPlaybackProgress: (
+    cb: (progress: import('./types').PlaybackProgress) => void,
+  ) => () => void;
   onJob: (cb: (job: ToolJob) => void) => () => void;
   onJobRemoved: (cb: (id: string) => void) => () => void;
 };

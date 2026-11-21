@@ -8,7 +8,15 @@
 // No Electron import, so it can be driven by plain Node in tests.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -36,6 +44,9 @@ export type HandlerContext<V> = {
   signal: AbortSignal;
   /** Reports 0–100, or null while it cannot tell. */
   progress: (percent: number | null) => void;
+  /** A short line shown with the finished job, for something the person
+   *  should know about it ("This video had no sound."). The last one wins. */
+  note: (text: string) => void;
   /**
    * A new path in the output folder, named after the input with `suffix`
    * and the extension `ext`, never one that exists. It counts as the job's
@@ -71,7 +82,19 @@ export type QueueDeps = {
   getOutputDir: () => string;
   /** How many jobs run at once. */
   concurrency?: number;
+  /** Where finished runs are kept, so they are still listed after the app
+   *  restarts (as downloads are). None keeps them in memory only. */
+  file?: string;
 };
+
+/** A finished run as it is kept on disk. */
+type SavedRun = { job: ToolJob; inputs: string[]; outputs: string[] };
+
+/** How many finished runs are kept; the oldest go first. */
+const keptRuns = 500;
+
+const finished = (status: ToolJob['status']) =>
+  status === 'done' || status === 'failed' || status === 'cancelled';
 
 type Entry = {
   job: ToolJob;
@@ -93,6 +116,64 @@ export class ToolQueue extends EventEmitter<{
 
   constructor(private deps: QueueDeps) {
     super();
+    this.load();
+  }
+
+  /**
+   * Takes back the runs kept from before: finished ones whose outputs are
+   * all still there, and failed or cancelled ones. A run that was under way
+   * when the app quit was stopped then, so none is kept.
+   */
+  private load() {
+    if (!this.deps.file) return;
+    let saved: SavedRun[];
+    try {
+      saved = JSON.parse(readFileSync(this.deps.file, 'utf8'));
+    } catch {
+      return;
+    }
+    if (!Array.isArray(saved)) return;
+    for (const run of saved) {
+      const { job, inputs, outputs } = run ?? {};
+      if (!job?.id || !finished(job.status) || !Array.isArray(outputs)) {
+        continue;
+      }
+      if (job.status === 'done' && !outputs.every((file) => existsSync(file))) {
+        continue;
+      }
+      this.entries.set(job.id, {
+        job,
+        inputs: Array.isArray(inputs) ? inputs : [],
+        // It won't run again; only its record and outputs are used.
+        handler: this.deps.handlers.get(job.toolId) ?? {
+          options: {},
+          run: async () => {},
+        },
+        values: {} as OptionValues<Options>,
+        controller: new AbortController(),
+        outputs,
+      });
+    }
+  }
+
+  /** Writes the finished runs down, newest first, by way of a temporary
+   *  file, so a crash mid-write never leaves half a list. */
+  private save() {
+    const { file } = this.deps;
+    if (!file) return;
+    const runs: SavedRun[] = [...this.entries.values()]
+      .filter((entry) => finished(entry.job.status))
+      .sort((a, b) => b.job.createdAt - a.job.createdAt)
+      .slice(0, keptRuns)
+      .map(({ job, inputs, outputs }) => ({ job, inputs, outputs }));
+    try {
+      mkdirSync(path.dirname(file), { recursive: true });
+      const partial = `${file}.${process.pid}.tmp`;
+      writeFileSync(partial, JSON.stringify(runs));
+      renameSync(partial, file);
+    } catch (error) {
+      console.error('Could not keep the tool runs:', error);
+    }
   }
 
   /** The ids of the tools that have a handler. */
@@ -108,6 +189,16 @@ export class ToolQueue extends EventEmitter<{
   outputsOf(id: string): string[] {
     const entry = this.entries.get(id);
     return entry?.job.status === 'done' ? entry.outputs : [];
+  }
+
+  /** What a finished job's output `file` was made from: its first input. */
+  inputOf(file: string): string | undefined {
+    for (const entry of this.entries.values()) {
+      if (entry.job.status === 'done' && entry.outputs.includes(file)) {
+        return entry.inputs[0];
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -220,6 +311,18 @@ export class ToolQueue extends EventEmitter<{
       return;
     this.entries.delete(id);
     this.emit('job-removed', id);
+    this.save();
+  }
+
+  /** Takes every finished, failed and cancelled run off the list (their
+   *  files stay), for Settings › Storage. */
+  clearFinished() {
+    for (const [id, entry] of this.entries) {
+      if (!finished(entry.job.status)) continue;
+      this.entries.delete(id);
+      this.emit('job-removed', id);
+    }
+    this.save();
   }
 
   /** Cancels everything, for quitting. */
@@ -230,6 +333,8 @@ export class ToolQueue extends EventEmitter<{
   private update(entry: Entry, patch: Partial<ToolJob>) {
     entry.job = { ...entry.job, ...patch };
     this.emit('job-updated', entry.job);
+    // Kept once it has finished, one way or another.
+    if (patch.status && finished(patch.status)) this.save();
   }
 
   private pump() {
@@ -250,6 +355,7 @@ export class ToolQueue extends EventEmitter<{
     const [input] = entry.inputs;
     const name = baseName(input);
     let lastProgress = 0;
+    let note: string | undefined;
     const context: HandlerContext<OptionValues<Options>> = {
       input,
       inputs: [...entry.inputs],
@@ -264,6 +370,9 @@ export class ToolQueue extends EventEmitter<{
           progress:
             percent === null ? null : Math.min(Math.max(percent, 0), 100),
         });
+      },
+      note: (text) => {
+        note = text;
       },
       outputPath: (suffix, ext) => {
         const dir = this.deps.getOutputDir();
@@ -292,6 +401,7 @@ export class ToolQueue extends EventEmitter<{
       this.update(entry, {
         status: 'done',
         progress: 100,
+        ...(note && { note }),
         outputs: entry.outputs.map((output) => path.basename(output)),
         outputSize: entry.outputs.reduce(
           (total, output) => total + (sizeOf(output) ?? 0),

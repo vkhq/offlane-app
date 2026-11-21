@@ -4,13 +4,22 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { Job } from '../../../shared/types';
-import { LoaderCircle, Play, Volume2, VolumeX, X } from '../../ui';
+import type { PlaybackProgress, PlaybackSource } from '../../shared/types';
+import {
+  Captions,
+  Languages,
+  LoaderCircle,
+  Play,
+  Volume2,
+  VolumeX,
+  X,
+} from '../components/icons';
 import {
   Fullscreen,
   MoreVertical,
@@ -25,7 +34,7 @@ type State =
       stage: 'remux' | 'transcode' | null;
       percent: number | null;
     }
-  | { kind: 'ready'; url: string }
+  | { kind: 'ready'; url: string; source: PlaybackSource }
   | { kind: 'failed'; message: string };
 
 const revealLabel = navigator.userAgent.includes('Mac')
@@ -50,22 +59,65 @@ const step = 15;
  * the frame under the pointer, and a row of buttons. While it plays they
  * fade after the pointer rests, and come back when it moves.
  *
+ * A file saved with subtitles shows them, and a CC button hides them
+ * (or picks among several); one saved with more than one audio language
+ * has a button to switch, the original among them.
+ *
  * Keys: Space or K plays and pauses, ←/→ or J/L skip 15 s, ↑/↓ set the
- * volume, M mutes, F goes full screen, Esc closes.
+ * volume, M mutes, C shows or hides subtitles, F goes full screen, Esc
+ * closes.
  */
+/**
+ * What the player plays: a finished download or a tool's output, by its
+ * job's id, and how to ready it, open it and show it where it was saved.
+ */
+export type PlayerFile = {
+  id: string;
+  prepare: (audioTrack?: number) => Promise<PlaybackSource>;
+  cancel: () => void;
+  onProgress: (cb: (progress: PlaybackProgress) => void) => () => void;
+  open: () => void;
+  reveal: () => void;
+};
+
+/** A finished download, for the player. */
+export const downloadFile = (id: string): PlayerFile => ({
+  id,
+  prepare: (track) => window.downloader.preparePlayback(id, track),
+  cancel: () => void window.downloader.cancelPlayback(id),
+  onProgress: (cb) => window.downloader.onPlaybackProgress(cb),
+  open: () => void window.downloader.openFile(id),
+  reveal: () => void window.downloader.revealFile(id),
+});
+
+/** A tool's finished output, for the player. */
+export const toolFile = (id: string): PlayerFile => ({
+  id,
+  prepare: (track) => window.tools.preparePlayback(id, track),
+  cancel: () => void window.tools.cancelPlayback(id),
+  onProgress: (cb) => window.tools.onPlaybackProgress(cb),
+  open: () => void window.tools.open(id),
+  reveal: () => void window.tools.reveal(id),
+});
+
 export function PlayerModal({
-  job,
+  file,
+  audio = false,
   title,
   poster,
   onClose,
 }: {
-  job: Job;
+  file: PlayerFile;
+  /** Sound only: no picture, so its poster shows while it plays. */
+  audio?: boolean;
   title: string;
   /** The video's thumbnail, shown behind an audio file while it plays. */
   poster?: string;
   onClose: () => void;
 }) {
-  const api = window.downloader;
+  // The latest, for effects that run once per file.
+  const latest = useRef(file);
+  latest.current = file;
   const [state, setState] = useState<State>({
     kind: 'preparing',
     stage: null,
@@ -89,6 +141,13 @@ export function PlayerModal({
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  /** Which subtitle track shows, or -1 for none: the first to begin with,
+   *  as they were chosen when downloading. */
+  const [subtitle, setSubtitle] = useState(0);
+  /** The last subtitle track shown, for C and the CC button to bring back. */
+  const lastSubtitle = useRef(0);
+  /** Where to carry on once another audio track's copy has loaded. */
+  const resume = useRef<{ time: number; play: boolean } | null>(null);
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<number>(undefined);
   /** True while the pointer is over the panel, which then stays. */
@@ -96,8 +155,8 @@ export function PlayerModal({
 
   useEffect(() => {
     let live = true;
-    const off = api.onPlaybackProgress((progress) => {
-      if (live && progress.id === job.id) {
+    const onProgress = (progress: PlaybackProgress) => {
+      if (live && progress.id === file.id) {
         setState({
           kind: 'preparing',
           stage: progress.stage,
@@ -105,32 +164,105 @@ export function PlayerModal({
         });
         if (progress.aspect) setRatio(progress.aspect);
       }
-    });
-    api.preparePlayback(job.id).then(
-      (source) => {
-        if (!live) return;
-        // Audio has no picture: it shows its poster at 16:9. A video whose
-        // shape can't be told waits for its own metadata.
-        if (source.aspect) setRatio(source.aspect);
-        else if (job.quality === 'audio') setRatio(16 / 9);
-        setState({ kind: 'ready', url: source.url });
-      },
-      (error: unknown) => {
-        if (!live) return;
-        setRatio((current) => current ?? 16 / 9);
-        setState({
-          kind: 'failed',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      },
-    );
+    };
+    // Progress is only a nicety: without it, it still plays (or says why
+    // it can't, below).
+    let off = () => {};
+    try {
+      off = file.onProgress(onProgress);
+    } catch {
+      // No progress to show.
+    }
+    // Run in a promise, so even a failure before it gets going (a call the
+    // app doesn't have) shows as the player's own error, not a dead click.
+    Promise.resolve()
+      .then(() => file.prepare())
+      .then(
+        (source) => {
+          if (!live) return;
+          // Audio has no picture: it shows its poster at 16:9. A video whose
+          // shape can't be told waits for its own metadata.
+          if (source.aspect) setRatio(source.aspect);
+          else if (audio) setRatio(16 / 9);
+          setState({ kind: 'ready', url: source.url, source });
+        },
+        (error: unknown) => {
+          if (!live) return;
+          setRatio((current) => current ?? 16 / 9);
+          setState({
+            kind: 'failed',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
     return () => {
       live = false;
       off();
       // Nothing to stop once it plays; the main process ignores it then.
-      void api.cancelPlayback(job.id);
+      try {
+        latest.current.cancel();
+      } catch {
+        // Nothing to stop.
+      }
     };
-  }, [api, job.id, job.quality]);
+    // Once per file, whichever object names it.
+  }, [file.id, audio]);
+
+  const source = state.kind === 'ready' ? state.source : null;
+  const subtitles = source?.subtitles ?? [];
+  const audioTracks = source?.audioTracks ?? [];
+
+  // Subtitles come as text; each plays from a blob: URL of its own.
+  const subtitleUrls = useMemo(
+    () =>
+      subtitles.map((track) =>
+        URL.createObjectURL(new Blob([track.vtt], { type: 'text/vtt' })),
+      ),
+    [subtitles],
+  );
+  useEffect(
+    () => () => subtitleUrls.forEach((url) => URL.revokeObjectURL(url)),
+    [subtitleUrls],
+  );
+  // The chosen track shows; the rest stay loaded but hidden. Run again
+  // once a new copy (another audio track) has its tracks.
+  const showSubtitle = useCallback(() => {
+    const tracks = video.current?.textTracks;
+    if (!tracks) return;
+    for (let index = 0; index < tracks.length; index += 1) {
+      tracks[index].mode = index === subtitle ? 'showing' : 'hidden';
+    }
+  }, [subtitle]);
+  useEffect(showSubtitle, [showSubtitle, subtitleUrls]);
+
+  /** Shows subtitles if hidden and hides them if shown, or shows `index`. */
+  const chooseSubtitle = useCallback(
+    (index?: number) => {
+      const next = index ?? (subtitle === -1 ? lastSubtitle.current : -1);
+      if (next >= 0) lastSubtitle.current = next;
+      setSubtitle(next);
+    },
+    [subtitle],
+  );
+
+  /** Plays audio track `index`, from where it is now. */
+  const chooseAudio = async (index: number) => {
+    const v = video.current;
+    if (!source || index === source.audioTrack) return;
+    resume.current = {
+      time: v?.currentTime ?? 0,
+      play: !!v && !v.paused && !v.ended,
+    };
+    try {
+      const next = await file.prepare(index);
+      setState({ kind: 'ready', url: next.url, source: next });
+    } catch (error) {
+      setState({
+        kind: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   /** Shows the controls, and fades them again later if it is playing. */
   const wake = useCallback(() => {
@@ -223,6 +355,11 @@ export function PlayerModal({
           if (v) v.muted = !v.muted;
           wake();
           break;
+        case 'c':
+          if (subtitles.length === 0) return;
+          chooseSubtitle();
+          wake();
+          break;
         case 'f':
           toggleFullscreen();
           break;
@@ -233,7 +370,43 @@ export function PlayerModal({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, toggle, skip, toggleFullscreen, wake]);
+  }, [
+    onClose,
+    toggle,
+    skip,
+    toggleFullscreen,
+    wake,
+    subtitles.length,
+    chooseSubtitle,
+  ]);
+
+  const openSubtitles = async () => {
+    wake();
+    // One track: the button just shows or hides it.
+    if (subtitles.length === 1) return chooseSubtitle();
+    const choice = await window.app.contextMenu([
+      { id: 'off', label: `Off${subtitle === -1 ? '  ✓' : ''}` },
+      null,
+      ...subtitles.map((track, index) => ({
+        id: String(index),
+        label: `${track.label}${index === subtitle ? '  ✓' : ''}`,
+      })),
+    ]);
+    if (choice) chooseSubtitle(choice === 'off' ? -1 : Number(choice));
+  };
+
+  const openAudio = async () => {
+    wake();
+    const choice = await window.app.contextMenu(
+      audioTracks.map((track, index) => ({
+        id: String(index),
+        label: `${track.label}${track.original ? ' (Original)' : ''}${
+          index === source?.audioTrack ? '  ✓' : ''
+        }`,
+      })),
+    );
+    if (choice) void chooseAudio(Number(choice));
+  };
 
   const openMenu = async () => {
     wake();
@@ -253,10 +426,10 @@ export function PlayerModal({
       video.current.playbackRate = Number(choice.slice(6));
     }
     if (choice === 'open') {
-      void api.openFile(job.id);
+      file.open();
       onClose();
     }
-    if (choice === 'reveal') void api.revealFile(job.id);
+    if (choice === 'reveal') file.reveal();
   };
 
   const togglePip = () => {
@@ -306,7 +479,7 @@ export function PlayerModal({
           <video
             ref={video}
             src={state.url}
-            poster={job.quality === 'audio' ? poster : undefined}
+            poster={audio ? poster : undefined}
             autoPlay
             playsInline
             onClick={toggle}
@@ -316,6 +489,14 @@ export function PlayerModal({
               setDuration(v.duration);
               if (v.videoWidth && v.videoHeight) {
                 setRatio(v.videoWidth / v.videoHeight);
+              }
+              showSubtitle();
+              // Another audio track: on from the same moment.
+              const at = resume.current;
+              if (at) {
+                resume.current = null;
+                v.currentTime = at.time;
+                if (!at.play) v.pause();
               }
             }}
             onDurationChange={(event) =>
@@ -346,7 +527,17 @@ export function PlayerModal({
               })
             }
             className="absolute inset-0 size-full object-contain"
-          />
+          >
+            {subtitles.map((track, index) => (
+              <track
+                key={subtitleUrls[index]}
+                kind="subtitles"
+                src={subtitleUrls[index]}
+                srcLang={track.language || undefined}
+                label={track.label}
+              />
+            ))}
+          </video>
         ) : (
           <div className="absolute inset-0 grid place-items-center px-8 text-center">
             {state.kind === 'preparing' ? (
@@ -355,10 +546,10 @@ export function PlayerModal({
               <Failed
                 message={state.message}
                 onOpen={() => {
-                  void api.openFile(job.id);
+                  file.open();
                   onClose();
                 }}
-                onReveal={() => void api.revealFile(job.id)}
+                onReveal={() => file.reveal()}
               />
             )}
           </div>
@@ -402,7 +593,7 @@ export function PlayerModal({
                 time={time}
                 duration={duration}
                 buffered={buffered}
-                preview={job.quality === 'audio' ? undefined : state.url}
+                preview={audio ? undefined : state.url}
                 ratio={ratio}
                 onSeek={(to) => {
                   if (video.current) video.current.currentTime = to;
@@ -427,12 +618,38 @@ export function PlayerModal({
                   <Seek size={26} seconds={step} forward />
                 </Control>
                 <span className="flex-1" />
-                {document.pictureInPictureEnabled &&
-                  job.quality !== 'audio' && (
-                    <Control label="Picture in Picture" onClick={togglePip}>
-                      <PictureInPicture size={26} />
-                    </Control>
-                  )}
+                {/* Always there for a video, so it's plain when a file
+                    has none, rather than missing. */}
+                {!audio && (
+                  <Control
+                    label={
+                      subtitles.length === 0
+                        ? 'No subtitles in this file'
+                        : subtitles.length > 1
+                          ? 'Subtitles (C)'
+                          : subtitle === -1
+                            ? 'Show Subtitles (C)'
+                            : 'Hide Subtitles (C)'
+                    }
+                    disabled={subtitles.length === 0}
+                    onClick={() => void openSubtitles()}
+                  >
+                    <Captions
+                      size={24}
+                      filled={subtitles.length > 0 && subtitle !== -1}
+                    />
+                  </Control>
+                )}
+                {audioTracks.length > 1 && (
+                  <Control label="Audio" onClick={() => void openAudio()}>
+                    <Languages size={24} />
+                  </Control>
+                )}
+                {document.pictureInPictureEnabled && !audio && (
+                  <Control label="Picture in Picture" onClick={togglePip}>
+                    <PictureInPicture size={26} />
+                  </Control>
+                )}
                 <VolumeControl
                   volume={volume}
                   muted={muted}
@@ -474,10 +691,13 @@ const glass =
 function Control({
   label,
   onClick,
+  disabled = false,
   children,
 }: {
   label: string;
   onClick: () => void;
+  /** Shown but not pressable, its label saying why. */
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -485,8 +705,13 @@ function Control({
       type="button"
       aria-label={label}
       title={label}
-      onClick={onClick}
-      className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-full text-white hover:bg-white/15"
+      aria-disabled={disabled}
+      onClick={disabled ? undefined : onClick}
+      className={`grid size-11 shrink-0 place-items-center rounded-full ${
+        disabled
+          ? 'cursor-default text-white/35'
+          : 'cursor-pointer text-white hover:bg-white/15'
+      }`}
     >
       {children}
     </button>

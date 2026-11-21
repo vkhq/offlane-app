@@ -180,6 +180,8 @@ export const PanelLeft = makeIcon('PanelLeft', {
 
 export const Plus = makeIcon('Plus', { lines: 'M12 5v14M5 12h14' });
 
+export const Minus = makeIcon('Minus', { lines: 'M5 12h14' });
+
 export const X = makeIcon('X', { lines: 'm6.5 6.5 11 11m0-11-11 11' });
 
 export const CaretDown = makeIcon('CaretDown', {

@@ -1,27 +1,25 @@
+import { type ReactNode, useEffect, useState } from 'react';
+
 import { type FileKind, fileKindOf } from '../../shared/fileKinds';
 import type { ToolJob } from '../../shared/tools';
+import type { FilePreview } from '../../shared/types';
 import {
   type AppIcon,
-  ArrowRight,
-  Ellipsis,
   File as FileIcon,
   FilePdf,
   Image,
   Music,
   Video,
 } from '../components/icons';
-import { ProgressBar } from '../components/ProgressBar';
 import { formatBytes } from '../downloads';
 import { tools } from '../tools';
-import { FlowLink, FlowNode, type FlowTone } from './Flow';
+import type { FlowTone } from './Flow';
 import { useToolJobs } from './jobs';
-import { NextStepNode, NextSteps } from './NextSteps';
+import { toolFile } from './PlayerModal';
+import { ResultCard, revealLabel } from './ResultCard';
+import { Results } from './Results';
 import type { StepInput } from './steps';
-import { iconButton, smallButton } from './styles';
-
-const revealLabel = navigator.userAgent.includes('Mac')
-  ? 'Show in Finder'
-  : 'Show in Folder';
+import { madeLabel } from './verbs';
 
 /**
  * What a workflow step's runs came to, as the link down to them says it:
@@ -52,52 +50,64 @@ export function runStatus(
   };
 }
 
+const isActive = (job: ToolJob) =>
+  job.status === 'queued' || job.status === 'running';
+
 /**
- * A workflow step's runs, newest first: a link with how they are going
- * ("Compressing · 45%"), then a card with each run's progress or what it
- * made, and the tools that can take it on. Nothing until something has run.
+ * A tool's runs in a workflow, on its page or as a later step: the shared
+ * results section (see Results.tsx), a card each. Every tool's results come
+ * from here, so a new tool needs nothing of its own to show them.
  */
 export function JobResults({
   toolId,
   ids,
   verb,
+  action,
 }: {
   toolId: string;
   ids: string[];
   /** What a run does, while it runs: Compressing. */
   verb?: string;
+  /** The button that started them (Mute Video), so once done the link
+   *  can say what they made: 2 Videos Muted. */
+  action?: string;
 }) {
   const jobs = useToolJobs(toolId).filter((job) => ids.includes(job.id));
-  if (jobs.length === 0) return null;
   const status = runStatus(
     jobs.map((job) => ({
-      active: job.status === 'queued' || job.status === 'running',
+      active: isActive(job),
       done: job.status === 'done',
       progress: job.status === 'running' ? job.progress : null,
     })),
     verb,
   );
+  // Once nothing is under way, what was made, rather than just Done.
+  const made = jobs.filter((job) => job.status === 'done');
+  const label =
+    status.tone === 'done' && action && made[0]?.outputs[0]
+      ? madeLabel(
+          action,
+          fileKindOf(made[0].outputs[0]),
+          made.length,
+          jobs.length,
+        )
+      : null;
 
   return (
-    <>
-      <FlowLink label={status.label} tone={status.tone} />
-      <FlowNode>
-        <ul className="divide-y divide-hairline rounded-2xl bg-canvas px-4 shadow-card">
-          {jobs.map((job) => (
-            <JobRow key={job.id} job={job} inline={jobs.length > 1} />
-          ))}
-        </ul>
-      </FlowNode>
-      {jobs.length === 1 && jobs[0].status === 'done' && (
-        <NextStepNode
-          from={tools.find((tool) => tool.id === toolId)}
-          outputs={outputsOf(jobs[0])}
-        />
-      )}
-    </>
+    <Results
+      status={{ label: label ?? status.label, tone: status.tone }}
+      from={tools.find((tool) => tool.id === toolId)}
+      items={jobs.map((job) => ({
+        id: job.id,
+        active: isActive(job),
+        outputs: job.status === 'done' ? outputsOf(job) : [],
+        render: (next) => <JobCard job={job} next={next} />,
+      }))}
+    />
   );
 }
 
+/** A finished run's files, as a later step's inputs. */
 const outputsOf = (job: ToolJob): StepInput[] =>
   job.outputs.map((name, index) => ({
     source: 'tool',
@@ -116,154 +126,111 @@ const kindIcons: Record<FileKind, AppIcon> = {
 };
 
 /**
- * How much smaller a compressing tool made its input: the sizes before and
- * after, and the change as a share of before. Only for tools that exist to
- * make files smaller, and only once both sizes are known.
+ * How much smaller a compressing tool made its input, as a share of it.
+ * Only for tools that exist to make files smaller, once both sizes are
+ * known.
  */
 function savingsOf(job: ToolJob) {
   const { inputSize: before, outputSize: after } = job;
   if (!job.toolId.startsWith('compress-') || !before || after === undefined) {
     return null;
   }
-  return { before, after, change: Math.round((1 - after / before) * 100) };
+  const change = Math.round((1 - after / before) * 100);
+  return change > 0
+    ? `${change}% smaller`
+    : change < 0
+      ? `${-change}% larger`
+      : 'Same size';
 }
 
-/**
- * One run, as a row of its step's card: what it made (or is making), a
- * tile with its kind's icon, tinted green once done or red if it failed.
- * A compressing tool's finished run shows the size before and after, how
- * much smaller it is, and a bar of the size kept. `inline` puts the tools
- * its outputs can go on to under it, for a run among several; a run on its
- * own has them as a step below instead.
- */
-function JobRow({ job, inline }: { job: ToolJob; inline: boolean }) {
+/** A run's card: what it made (or is making), on the shared ResultCard. */
+function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
   const api = window.tools;
-  const active = job.status === 'queued' || job.status === 'running';
   const done = job.status === 'done';
-  const name =
-    done && job.outputs.length > 0 ? job.outputs.join(', ') : job.input;
-  const Icon = kindIcons[fileKindOf(name)];
-  const savings = done ? savingsOf(job) : null;
+  const name = done && job.outputs.length > 0 ? job.outputs[0] : job.input;
+  const kind = fileKindOf(name);
+  // A picture of what it made: the video it came from's, if that was
+  // downloaded, or a frame, the picture itself, an album's cover (see the
+  // main process).
+  const [preview, setPreview] = useState<FilePreview | null>(null);
+  useEffect(() => {
+    if (!done) return;
+    let live = true;
+    void api
+      .preview(job.id)
+      .then((found) => live && setPreview(found))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [api, done, job.id]);
+  const playable = done && (kind === 'video' || kind === 'audio');
 
-  const openMenu = async () => {
-    const choice = await window.app.contextMenu([
-      { id: 'reveal', label: revealLabel, enabled: done },
-      { id: 'cancel', label: 'Cancel', enabled: active },
-      null,
-      { id: 'remove', label: 'Remove from List', enabled: !active },
-    ]);
-    if (choice === 'reveal') void api.reveal(job.id);
-    if (choice === 'cancel') void api.cancel(job.id);
-    if (choice === 'remove') void api.remove(job.id);
-  };
+  const details = done
+    ? [
+        name.match(/\.([a-z0-9]+)$/i)?.[1]?.toUpperCase(),
+        job.outputs.length > 1 && `${job.outputs.length} files`,
+        job.outputSize !== undefined && formatBytes(job.outputSize),
+        savingsOf(job),
+        job.note,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : describe(job);
 
   return (
-    <li className="flex items-center gap-3.5 py-3.5">
-      <span
-        className={`grid size-11 shrink-0 place-items-center rounded-xl ${
-          done
-            ? 'bg-green-50 text-green-700'
-            : job.status === 'failed'
-              ? 'bg-brand-soft text-brand'
-              : 'bg-group text-ink-soft'
-        }`}
-      >
-        <Icon size={19} />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-[14px] font-medium">{name}</span>
-        {job.status === 'running' && (
-          <ProgressBar value={job.progress} label="Progress" />
-        )}
-        {savings ? (
-          <>
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
-              <span className="text-ink-faint line-through decoration-ink-faint/60">
-                {formatBytes(savings.before)}
-              </span>
-              <ArrowRight size={12} className="text-ink-faint" />
-              <span className="font-semibold">
-                {formatBytes(savings.after)}
-              </span>
-              <span
-                className={`rounded-full px-2 py-px text-[12px] font-medium ${
-                  savings.change > 0
-                    ? 'bg-green-100 text-green-900'
-                    : 'bg-amber-100 text-amber-900'
-                }`}
-              >
-                {savings.change > 0
-                  ? `${savings.change}% smaller`
-                  : savings.change < 0
-                    ? `${-savings.change}% larger`
-                    : 'Same size'}
-              </span>
-            </span>
-            {/* What's left of the original: the green share. */}
-            <span
-              aria-hidden
-              className="mt-1 h-1.5 w-full max-w-72 overflow-hidden rounded-full bg-group"
-            >
-              <span
-                style={{
-                  width: `${Math.min(100, Math.max(2, 100 - savings.change))}%`,
-                }}
-                className="block h-full rounded-full bg-green-500"
-              />
-            </span>
-          </>
-        ) : done ? (
-          <span className="text-[13px] text-ink-soft">
-            {job.outputSize !== undefined
-              ? formatBytes(job.outputSize)
-              : 'Done'}
-          </span>
-        ) : (
-          <span
-            className={`truncate text-xs ${
-              job.status === 'failed' ? 'text-brand' : 'text-ink-soft'
-            }`}
-          >
-            {describe(job)}
-          </span>
-        )}
-        {inline && done && job.outputs.length > 0 && (
-          <NextSteps
-            from={tools.find((tool) => tool.id === job.toolId)}
-            outputs={outputsOf(job)}
-          />
-        )}
-      </div>
-      {active && (
-        <button
-          type="button"
-          onClick={() => api.cancel(job.id)}
-          className={smallButton}
-        >
-          Cancel
-        </button>
-      )}
-      {done && (
-        <button
-          type="button"
-          onClick={() => api.reveal(job.id)}
-          className={smallButton}
-        >
-          {revealLabel}
-        </button>
-      )}
-      <button
-        type="button"
-        aria-label="More actions"
-        onClick={openMenu}
-        className={iconButton}
-      >
-        <Ellipsis size={16} />
-      </button>
-    </li>
+    <ResultCard
+      thumbnail={preview?.thumbnail}
+      icon={kindIcons[kind]}
+      duration={preview?.duration}
+      title={name}
+      details={details}
+      failed={job.status === 'failed'}
+      progress={job.status === 'running' ? job.progress : undefined}
+      play={
+        playable
+          ? {
+              file: toolFile(job.id),
+              title: name,
+              audio: kind === 'audio',
+              poster: preview?.thumbnail ?? undefined,
+            }
+          : undefined
+      }
+      action={
+        isActive(job)
+          ? { label: 'Cancel', run: () => void api.cancel(job.id) }
+          : done
+            ? { label: revealLabel, run: () => void api.reveal(job.id) }
+            : undefined
+      }
+      onMenu={(play) => void jobMenu(job, playable, play)}
+      next={next}
+    />
   );
 }
 
+/** A run's menu: Play for one that plays, then the rest. */
+async function jobMenu(job: ToolJob, playable: boolean, onPlay: () => void) {
+  const api = window.tools;
+  const active = isActive(job);
+  const done = job.status === 'done';
+  const choice = await window.app.contextMenu([
+    ...(playable ? [{ id: 'play', label: 'Play' }] : []),
+    { id: 'open', label: 'Open in Default App', enabled: done },
+    { id: 'reveal', label: revealLabel, enabled: done },
+    { id: 'cancel', label: 'Cancel', enabled: active },
+    null,
+    { id: 'remove', label: 'Remove from List', enabled: !active },
+  ]);
+  if (choice === 'play') onPlay();
+  if (choice === 'open') void api.open(job.id);
+  if (choice === 'reveal') void api.reveal(job.id);
+  if (choice === 'cancel') void api.cancel(job.id);
+  if (choice === 'remove') void api.remove(job.id);
+}
+
+/** How a run is going, under its name. */
 function describe(job: ToolJob) {
   switch (job.status) {
     case 'queued':
@@ -273,7 +240,7 @@ function describe(job: ToolJob) {
         ? 'Starting…'
         : `${Math.floor(job.progress)}%`;
     case 'done':
-      return job.outputs.join(', ') || 'Done';
+      return 'Done';
     case 'cancelled':
       return 'Cancelled';
     case 'failed':

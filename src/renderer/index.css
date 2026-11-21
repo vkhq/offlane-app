@@ -82,6 +82,8 @@
     inset 0 0 0 0.5px rgb(255 255 255 / 0.6), 0 0 0 0.5px rgb(0 0 0 / 0.16),
     0 10px 30px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08);
   --shadow-card: 0 0 0 0.5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.07);
+  /* A lift off the canvas with no outline: only the soft shadow below. */
+  --shadow-lift: 0 10px 28px rgb(0 0 0 / 0.1), 0 2px 5px rgb(0 0 0 / 0.06);
   /* A status pill on a workflow link: a hairline and a low lift off the
      dotted canvas. */
   --shadow-node:

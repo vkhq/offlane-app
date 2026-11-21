@@ -92,6 +92,15 @@ const definitions: Definition[] = [
     clear: { label: 'Clear Finished', confirm: null },
   },
   {
+    id: 'tool-results',
+    group: 'App Data',
+    name: 'Tool Results',
+    description:
+      'The results the tools list under their pages, finished, failed or cancelled, kept across restarts. Clearing takes them off; the files stay.',
+    paths: ['tools'],
+    clear: { label: 'Clear Finished', confirm: null },
+  },
+  {
     id: 'unfinished-downloads',
     group: 'App Data',
     name: 'Unfinished Downloads',

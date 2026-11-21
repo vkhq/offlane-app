@@ -10,6 +10,7 @@ export const storageItemIds = [
   'toolkits',
   'history',
   'download-list',
+  'tool-results',
   'unfinished-downloads',
   'lookups',
   'playback',

@@ -10,8 +10,9 @@ export const contentSecurityPolicy = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
-  // Finished downloads, for the in-app player (see main/player.ts).
-  "media-src 'self' media:",
+  // Finished downloads, for the in-app player (see main/player.ts), and
+  // their subtitles, handed over as text and played from a blob: URL.
+  "media-src 'self' media: blob:",
   "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'none'",

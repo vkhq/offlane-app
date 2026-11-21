@@ -3,6 +3,8 @@
 // handler.ts imports from ./backend instead.
 export * from '../renderer/components/icons';
 export { ToolLayout } from '../renderer/toolkit/ToolLayout';
+// The canvas a tool page is drawn on: `reveal` glides something into view.
+export { useCanvas } from '../renderer/toolkit/Canvas';
 export {
   ClearButton,
   FlowLink,
@@ -53,3 +55,24 @@ export {
 } from '../renderer/downloads';
 export { useToolkit } from '../renderer/toolkits';
 export { addActivity } from '../renderer/history';
+
+// The in-app player, for a finished download or a tool's output.
+export {
+  PlayerModal,
+  downloadFile,
+  toolFile,
+  type PlayerFile,
+} from '../renderer/toolkit/PlayerModal';
+
+// A round checkbox for picking among thumbnails.
+export { RoundCheckbox } from '../renderer/toolkit/RoundCheckbox';
+
+// Results: the section every tool's and download's results show in, and
+// their card. Tools using standardTool get these without asking.
+export {
+  ResultCard,
+  clock,
+  revealLabel,
+  type Playable,
+} from '../renderer/toolkit/ResultCard';
+export { Results, type ResultItem } from '../renderer/toolkit/Results';

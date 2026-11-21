@@ -171,6 +171,27 @@ async function serialize(value: unknown): Promise<unknown> {
   return value;
 }
 
+/**
+ * A dropped or picked file's picture and length (or a session's saved
+ * file's), made in the main process: the file is noted there first, as
+ * for a session, so the page never learns its path.
+ */
+export async function itemPreview(item: File | SavedFile) {
+  let saved: SavedFile;
+  if (item instanceof File) {
+    let pending = savedFiles.get(item);
+    if (!pending) {
+      pending = window.sessions.saveFile(item);
+      savedFiles.set(item, pending);
+      pending.catch(() => savedFiles.delete(item));
+    }
+    saved = await pending;
+  } else {
+    saved = item;
+  }
+  return previewOf(saved.token);
+}
+
 /** Files' previews by token, asked of the main process once each. */
 const previews = new Map<string, Promise<FilePreview>>();
 

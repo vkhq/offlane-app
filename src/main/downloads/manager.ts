@@ -7,6 +7,7 @@
 //   • playlists as one job per item, never one giant yt-dlp run
 //
 // No Electron import, so the integration tests can drive it with plain Node.
+import { isLanguageCode } from '../../shared/languages';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync } from 'node:fs';
@@ -244,6 +245,30 @@ export class DownloadManager extends EventEmitter<{
     };
   }
 
+  /** Each fetched playlist video's picture, by lookup and place. */
+  private entryImages = new Map<string, Promise<string | null>>();
+
+  /**
+   * The thumbnail of video `index` of the playlist lookup `token` found,
+   * fetched once. Its address comes from the lookup itself, never from the
+   * page, so the page can't have any other address fetched.
+   */
+  entryThumbnail(token: string, index: number): Promise<string | null> {
+    const result = this.probes.get(token)?.result;
+    const entry =
+      result?.kind === 'playlist' && Number.isInteger(index)
+        ? result.entries[index]
+        : undefined;
+    if (!entry?.thumbnail) return Promise.resolve(null);
+    const key = `${token}:${index}`;
+    let image = this.entryImages.get(key);
+    if (!image) {
+      image = fetchThumbnail(entry.thumbnail, this.deps.getSettings().proxy);
+      this.entryImages.set(key, image);
+    }
+    return image;
+  }
+
   /** Adds jobs, validating everything the renderer sent. */
   enqueue(requests: DownloadRequest[]): Job[] {
     const settings = this.deps.getSettings();
@@ -260,6 +285,17 @@ export class DownloadManager extends EventEmitter<{
         status: 'queued',
         quality: request.quality,
         subtitles: request.subtitles === true,
+        // Codes from the page, checked: they end up in yt-dlp's arguments.
+        ...(isLanguageCode(request.subtitleLanguage) && {
+          subtitleLanguage: request.subtitleLanguage,
+          ...(request.subtitleAuto === true && { subtitleAuto: true }),
+        }),
+        ...(isLanguageCode(request.audioLanguage) && {
+          audioLanguage: request.audioLanguage,
+        }),
+        ...(isLanguageCode(request.originalLanguage) && {
+          originalLanguage: request.originalLanguage,
+        }),
         outputDir: request.outputDir || settings.downloadDir,
         createdAt: now,
         updatedAt: now,
@@ -547,6 +583,9 @@ export class DownloadManager extends EventEmitter<{
       settings,
       quality: job.quality,
       subtitles: job.subtitles,
+      subtitleLanguage: job.subtitleLanguage,
+      subtitleAuto: job.subtitleAuto,
+      audio: { language: job.audioLanguage, original: job.originalLanguage },
       outputDir: job.outputDir,
       tempDir,
       source: { infoJsonPath: info.path },
@@ -694,6 +733,10 @@ export class DownloadManager extends EventEmitter<{
     );
     for (const [token, outcome] of entries.slice(50)) {
       this.probes.delete(token);
+      // Its playlist's pictures go with it.
+      for (const key of this.entryImages.keys()) {
+        if (key.startsWith(`${token}:`)) this.entryImages.delete(key);
+      }
       if (outcome.infoJsonPath && !inUse.has(outcome.infoJsonPath)) {
         void fs.rm(outcome.infoJsonPath, { force: true });
       }

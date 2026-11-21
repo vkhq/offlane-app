@@ -36,8 +36,8 @@ export function onTabStateChange(listener: Listener) {
   return () => void listeners.delete(listener);
 }
 
-/** Keys a snapshot leaves out: where the page was scrolled to. */
-const unsaved = new Set(['scroll']);
+/** Keys a snapshot leaves out: where the page was scrolled or panned to. */
+const unsaved = new Set(['scroll', 'camera']);
 
 /**
  * What the tab's page at `pathname` holds, by key: everything it keeps with
@@ -143,4 +143,16 @@ export function useTabScroll(ref: RefObject<HTMLElement | null>) {
     area.addEventListener('scroll', onScroll, { passive: true });
     return () => area.removeEventListener('scroll', onScroll);
   }, [ref, id, slot]);
+}
+
+/**
+ * A value of the page's kept with its tab, read and written without
+ * rendering again or telling History: where a canvas was panned to.
+ */
+export function useTabStash<T>(key: string) {
+  const { id, slot } = useSlot(key);
+  return {
+    read: () => stores.get(id)?.get(slot) as T | undefined,
+    write: (value: T) => void storeFor(id).set(slot, value),
+  };
 }

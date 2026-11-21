@@ -7,14 +7,15 @@ import { useSession } from '../sessions';
 import { useTabState } from '../tabState';
 import { CloudUpload, Link2, Mic } from '../components/icons';
 import { DropZone, type Item } from './DropZone';
-import { ClearButton, FlowLink, FlowNode, FlowNotice, StartOver } from './Flow';
+import { ClearButton, FlowNode, FlowNotice, StartOver } from './Flow';
 import type { Input } from './inputs';
 import { JobResults } from './JobList';
-import { progressive } from './verbs';
+import { RunSection, runsLock } from './RunSection';
+import { pastTense } from './verbs';
 import { isToolJobGone, noteToolJobs, useAllJobs, useConnected } from './jobs';
 import { LinkField } from './LinkField';
 import { invalidLink, toLink } from './links';
-import { OptionsBar, summarizeOptions } from './OptionsBar';
+import { summarizeOptions } from './OptionsBar';
 import { Recorder, formatClock, useRecording } from './Recorder';
 import { ToolLayout } from './ToolLayout';
 import type { ToolPage } from './types';
@@ -105,6 +106,11 @@ export function standardTool<O extends Options>(
       Object.values(runs).join(),
     );
 
+    // Run, what it ran on is part of its record (see runsLock).
+    const locked = runsLock(
+      kept.map((id) => allJobs.find((job) => job.id === id)),
+    );
+
     const ready =
       input.kind === 'drop'
         ? items.length > 0
@@ -132,7 +138,7 @@ export function standardTool<O extends Options>(
       );
 
     const run = async () => {
-      if (!ready) return;
+      if (!ready || locked) return;
       const links =
         input.kind === 'link'
           ? [toLink(link)]
@@ -201,8 +207,10 @@ export function standardTool<O extends Options>(
                 setNotice('');
               }}
               onSubmit={() => void run()}
+              readOnly={locked}
               trailing={
-                link && (
+                link &&
+                !locked && (
                   <ClearButton
                     onClick={() => {
                       setLink('');
@@ -217,6 +225,7 @@ export function standardTool<O extends Options>(
             <DropZone
               input={input}
               items={items}
+              locked={locked}
               onItemsChange={(next) => {
                 setItems(next);
                 // Adding files starts the session, and puts it in the URL.
@@ -228,32 +237,32 @@ export function standardTool<O extends Options>(
             />
           )}
           {input.kind === 'record' && (
-            <Recorder input={input} recording={recording} />
+            <Recorder input={input} recording={recording} locked={locked} />
           )}
           {!ready && <FlowNotice>{notice || recording.error}</FlowNotice>}
         </FlowNode>
 
+        {/* Its options, button and results: the same on every tool's page
+            and every later step (see RunSection). */}
         {ready && (
-          <>
-            <FlowLink />
-            <FlowNode>
-              <OptionsBar
-                options={options}
-                values={values}
-                onChange={setValue}
-                onFile={(key, file) =>
-                  setAttachments((current) => ({ ...current, [key]: file }))
-                }
-                action={action}
-                busy={busy}
-                onRun={() => void run()}
-              />
-              <FlowNotice>{notice}</FlowNotice>
-            </FlowNode>
-          </>
+          <RunSection
+            tool={tool}
+            config={config}
+            values={values}
+            onChange={setValue}
+            onFile={(key, file) =>
+              setAttachments((current) => ({ ...current, [key]: file }))
+            }
+            count={input.kind === 'drop' ? items.length : undefined}
+            kind={input.kind === 'drop' ? input.files : undefined}
+            locked={locked}
+            busy={busy}
+            notice={notice}
+            onRun={() => void run()}
+            ids={own}
+          />
         )}
-
-        <JobResults toolId={tool.id} ids={own} verb={progressive(action)} />
+        {!ready && <JobResults toolId={tool.id} ids={own} action={action} />}
       </ToolLayout>
     );
   };
@@ -262,48 +271,3 @@ export function standardTool<O extends Options>(
 }
 
 /** Past tenses of the verbs tools' buttons start with. */
-const pasts: Record<string, string> = {
-  Add: 'added',
-  Apply: 'Applied',
-  Burn: 'Burned',
-  Change: 'changed',
-  Clean: 'Cleaned',
-  Compress: 'Compressed',
-  Convert: 'Converted',
-  Create: 'created',
-  Delete: 'deleted',
-  Export: 'Exported',
-  Extract: 'Extracted',
-  Merge: 'Merged',
-  Mute: 'Muted',
-  Remove: 'removed',
-  Rename: 'Renamed',
-  Replace: 'replaced',
-  Resize: 'Resized',
-  Rotate: 'Rotated',
-  Save: 'Saved',
-  Sign: 'Signed',
-  Split: 'Split',
-  Summarize: 'Summarized',
-  Transcribe: 'Transcribed',
-  Translate: 'Translated',
-  Trim: 'Trimmed',
-};
-
-/**
- * What a finished run is called, from the tool's button: Compress becomes
- * Compressed, Clean Up "Cleaned up", Remove Background "Background removed".
- */
-export function pastTense(action: string) {
-  const [verb, ...rest] = action.split(' ');
-  const past = pasts[verb];
-  if (!past) return 'Done';
-  const object = rest.join(' ');
-  if (!object) return past;
-  // A verb with a particle (Clean Up, Burn In) keeps its order.
-  if (/^(Up|In|Out)$/.test(object)) return `${past} ${object.toLowerCase()}`;
-  if (past === past.toLowerCase()) {
-    return `${object} ${past}`;
-  }
-  return `${past} ${object.toLowerCase()}`;
-}

@@ -26,6 +26,7 @@ import {
   isDownloadGone,
   noteDownloads,
   useDownloads,
+  useCanvas,
   useTabState,
 } from '../../ui';
 import { DownloadResults, FfmpegRow } from './DownloadList';
@@ -56,6 +57,9 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
   const [saved, setSaved] = useTabState<Record<string, unknown>>('values', {});
   /** The downloads this workflow started. */
   const [own, setOwn] = useTabState<string[]>('jobs', []);
+  /** A playlist's videos left out of the download, by their place: every
+   *  one is ticked to begin with. */
+  const [unticked, setUnticked] = useTabState<number[]>('unticked', []);
   /** The found video's thumbnail, inlined, kept so a saved session shows it. */
   const [thumbnail, setThumbnail] = useTabState<string | null>(
     'thumbnail',
@@ -64,8 +68,6 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
   /** While a link is being looked up or queued. */
   const [busy, setBusy] = useState(false);
   const started = own.length > 0;
-  // Once every download it started has finished, the options step goes:
-  // the card leads straight on to the downloads.
   const ownJobs = useDownloads().filter((job) => own.includes(job.id));
   // How each download stands, for History; one not yet heard of has only
   // just started.
@@ -143,18 +145,19 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
     setThumbnail(null);
     setLink('');
     setFound(null);
+    setUnticked([]);
     setNotice('');
     setSignIn(null);
     setOwn([]);
   };
 
-  // Once found, the page scrolls to its end so the options show whole
-  // beneath the card, after the links have grown to their length.
+  // Once found, the canvas glides so the options show whole beneath the
+  // card, after the links have grown to their length.
   const options = useRef<HTMLElement>(null);
+  const canvas = useCanvas();
   const showOptions = () =>
     setTimeout(() => {
-      const scroller = options.current?.closest('.overflow-y-auto');
-      scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+      if (options.current) canvas?.reveal(options.current, 'nearest');
     }, 200);
 
   const lookUp = async (value = link) => {
@@ -178,6 +181,7 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
         return;
       }
       setFound(keepThumbnail(result));
+      setUnticked([]);
       setThumbnail(result.thumbnailImage);
       session.record();
       showOptions();
@@ -199,25 +203,39 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
       : height
         ? `${height}`
         : 'best';
+    // A playlist's English subtitles; one video's chosen tracks, by code.
     const subtitles = values.subtitles === true;
+    const subtitleTrack = lookup.subtitleTracks[String(values.subtitleTrack)];
+    const audioLanguage = lookup.audioTracks[String(values.audioTrack)];
     setBusy(true);
     setNotice('');
     try {
       const requests =
         found.kind === 'playlist'
-          ? found.entries.map((entry) => ({
-              url: entry.url,
-              quality,
-              subtitles,
-              title: entry.title,
-              thumbnail: entry.thumbnail ?? undefined,
-              duration: entry.duration ?? undefined,
-            }))
+          ? found.entries
+              .filter((_, index) => !unticked.includes(index))
+              .map((entry) => ({
+                url: entry.url,
+                quality,
+                subtitles,
+                title: entry.title,
+                thumbnail: entry.thumbnail ?? undefined,
+                duration: entry.duration ?? undefined,
+              }))
           : [
               {
                 url: found.url,
                 quality,
                 subtitles,
+                ...(subtitleTrack && {
+                  subtitleLanguage: subtitleTrack.code,
+                  subtitleAuto: subtitleTrack.auto,
+                }),
+                // The original is saved beside another choice, to switch to.
+                ...(audioLanguage && {
+                  audioLanguage,
+                  originalLanguage: lookup.originalLanguage,
+                }),
                 probeToken: found.probeToken,
               },
             ];
@@ -232,9 +250,15 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
     }
   };
 
+  // A playlist's: how many of its videos are ticked.
+  const chosenCount =
+    found?.kind === 'playlist'
+      ? found.entries.length -
+        unticked.filter((index) => index < found.entries.length).length
+      : 1;
   const action =
     found?.kind === 'playlist'
-      ? `Download ${found.entries.length}`
+      ? `Download ${chosenCount} Video${chosenCount === 1 ? '' : 's'}`
       : 'Download';
 
   const restart = (
@@ -261,6 +285,7 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
             setThumbnail(null);
             setLink(value);
             setFound(null);
+            setUnticked([]);
             setNotice('');
             setSignIn(null);
             setOwn([]);
@@ -317,27 +342,40 @@ export default function DownloadVideoPage({ tool }: ToolPageProps) {
 
       {found && lookup && values && (
         <>
-          <FoundCard found={found} />
-          {!finished && (
-            <>
-              <FlowLink />
-              <FlowNode ref={options}>
-                <OptionsBar
-                  options={lookup.options}
-                  values={values}
-                  onChange={(key, value) =>
-                    setSaved((current) => ({ ...current, [key]: value }))
-                  }
-                  action={action}
-                  busy={busy}
-                  disabled={started}
-                  onRun={() => void enqueue()}
-                />
-                {!started && <FfmpegRow />}
-                <FlowNotice>{notice}</FlowNotice>
-              </FlowNode>
-            </>
-          )}
+          <FoundCard
+            found={found}
+            selection={{
+              ticked: (index) => !unticked.includes(index),
+              toggle: (index) =>
+                setUnticked((current) =>
+                  current.includes(index)
+                    ? current.filter((other) => other !== index)
+                    : [...current, index],
+                ),
+              // Fixed once the downloads have started.
+              locked: started,
+            }}
+          />
+          {/* Once started, and after it has finished, the options stay as
+              a record of what was chosen, between the video and its
+              downloads, as on the other tools. */}
+          <FlowLink label="Download Options" tone="info" />
+          <FlowNode ref={options}>
+            <OptionsBar
+              options={lookup.options}
+              values={values}
+              onChange={(key, value) =>
+                setSaved((current) => ({ ...current, [key]: value }))
+              }
+              action={action}
+              // Nothing ticked: nothing to download.
+              busy={busy || chosenCount === 0}
+              disabled={started}
+              onRun={() => void enqueue()}
+            />
+            {!started && <FfmpegRow />}
+            <FlowNotice>{notice}</FlowNotice>
+          </FlowNode>
         </>
       )}
 

@@ -35,12 +35,49 @@ npm run new-tool -- <group> <tool-id> "<Name>" [--handler]
 
 ## Pages
 
-`standardTool({ input, options, action })` gives the usual page: files (from
-`dropVideos()`, `dropPdfs()` and so on), a link or a recording, then the
-options, Clear and the action button, with the results listed under it. A tool
-that needs a different page writes its own component from the same parts
-(`ToolLayout`, `DropZone`, `LinkField`, `OptionsForm`, `ActionBar`,
-`JobList`); see `video/download-video/page.tsx`.
+`standardTool({ input, options, action })` gives the usual page, and a tool
+should need nothing else. A new tool is its manifest, options, a one-line page
+and a handler; everything below comes with `standardTool`, the same on its own
+page and when it is used as a later step, so never rebuild any of it:
+
+- **Input:** files (from `dropVideos()`, `dropPdfs()` and so on), a link or a
+  recording; locked once it has run, until Start Over. Videos, dropped,
+  picked or made by an earlier stage, show the same way everywhere
+  (`MediaStrip`): a strip of frames with their lengths, and their sizes
+  where the tool is about size (`withSizes(dropVideos())`, as Compress). Dropped
+  or picked ones sit under the drop zone, which stays to add more, each
+  with a ✕ to take it out; an earlier stage's have a checkbox to run on
+  it or not.
+- **Options:** a "<Tool> Options" chip on the link to them, the menu bar of
+  options, and the button, counting what it runs on ("Mute 2 Videos"); kept
+  as a read-only record once run (`RunSection`).
+- **Results:** a link saying how they are going, then what was made ("2
+  Videos Muted"), and a card for each run (`Results`, `ResultCard`): its
+  picture (a frame, the picture itself, an album's cover, or the thumbnail
+  of the video it was downloaded as), its length, name and size, progress,
+  Cancel, Play in the app's player for video and audio, and a menu (Open,
+  Show in Finder, Remove).
+- **What's Next:** among several results a chip on each card, and once none
+  is under way the What's Next? button for all of them; picking a tool adds
+  it as a step branching below that stage, with checkboxes to choose which
+  files it runs on. Every stage keeps its What's Next?, so a stage can
+  branch into several tools, side by side.
+- **Canvas:** the page is a canvas (`Canvas`) that pans with two fingers
+  on a trackpad, the wheel, or by dragging an empty part (or anywhere with
+  Space held), and zooms with a pinch or its corner buttons. It pans only
+  once the stages are bigger than the window. A page that wants something
+  in view calls `useCanvas()?.reveal(element)` rather than scrolling.
+- **History, tabs and restarts:** the page's state is kept with its tab and
+  in History, and its results are still listed after the app restarts.
+
+How these look and behave is changed in one place, in
+`src/renderer/toolkit`, and every tool follows.
+
+A tool that needs a page of its own (as Download Video does, for its lookup
+and download manager) builds it from the same parts: `ToolLayout`,
+`DropZone`, `LinkField`, `OptionsBar`, and `Results` with `ResultCard` for
+its results, so they look and act like every other tool's. See
+`video/download-video/page.tsx`.
 
 Pages load the first time they are needed, or in the background once the app
 is idle, so startup only loads the manifests.

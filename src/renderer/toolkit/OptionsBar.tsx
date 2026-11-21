@@ -1,4 +1,4 @@
-import { Fragment, useRef } from 'react';
+import { useRef } from 'react';
 
 import {
   type OptionValues,
@@ -7,15 +7,21 @@ import {
   type SettingValue,
   isShown,
 } from '../../shared/tools';
-import { ArrowRight, Check, ChevronDown } from '../components/icons';
+import { ArrowRight, ChevronDown } from '../components/icons';
+import { FlowLink } from './Flow';
 import { SelectMenu } from './SelectMenu';
 
 /**
- * A tool's options in one rounded bar, split by hairlines, with its action
- * at the right end: each option is a segment showing its value, and picks
- * from a menu, flips, or takes a short entry in place. `disabled` shrinks it
- * to a small summary of the choices made, once a step has run.
- * With no options, the action is the bar.
+ * A tool's options and its action. The options are a menu bar, as macOS
+ * has: each option's name in one row on a light grey strip (a shade
+ * deeper at its foot), which stands off the white canvas, and
+ * pressing one drops down its menu, the choice made ticked. Each option is
+ * capped in width, so all of them stay in one row, in view. Each name has what it is set to beneath it. The action
+ * is its own button under the bar, centred on the flow and linked to the
+ * bar by an arrow, as each step leads to the next.
+ *
+ * `disabled`, once a step has run, keeps the bar as a record of what was
+ * chosen, faded: its options no longer open, and there is no action. With no options there is only the action, and nothing once run.
  */
 export function OptionsBar<O extends Options>({
   options,
@@ -42,77 +48,40 @@ export function OptionsBar<O extends Options>({
   const entries = Object.entries(options).filter(([key]) =>
     isShown(options, key, values),
   );
-  const run = (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={onRun}
-      className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-ink px-4 text-[13px] font-semibold text-canvas hover:opacity-90 disabled:cursor-default disabled:opacity-40"
-    >
-      {action}
-      <ArrowRight size={14} />
-    </button>
-  );
-  if (entries.length === 0) return disabled ? null : run;
-  if (disabled) return <Summary options={options} values={values} />;
 
   return (
-    <div className="flex h-11 max-w-full items-center rounded-full bg-well p-1">
-      {/* Scrolls sideways when the options don't fit, fading out under
-          the action so it shows there is more. */}
-      <div className="no-scrollbar flex min-w-0 flex-1 items-center overflow-x-auto pl-2 [mask-image:linear-gradient(to_right,#000_calc(100%-16px),transparent)]">
-        {entries.map(([key, setting], index) => (
-          <Fragment key={key}>
-            {index > 0 && (
-              <span aria-hidden className="h-4 w-px shrink-0 bg-ink/15" />
-            )}
-            <Segment
+    <div className="flex flex-col items-center">
+      {entries.length > 0 && (
+        <div
+          role="menubar"
+          aria-label="Options"
+          className="flex max-w-full items-stretch justify-center gap-0 rounded-[18px] bg-linear-to-b from-group to-field p-1.5 shadow-lift"
+        >
+          {entries.map(([key, setting]) => (
+            <Title
+              key={key}
               setting={setting}
               value={values[key]}
-              disabled={disabled}
+              readOnly={disabled}
               onChange={(value) => onChange(key, value)}
               onFile={(file) => onFile?.(key, file)}
             />
-          </Fragment>
-        ))}
-      </div>
-      {!disabled && <div className="pl-1">{run}</div>}
+          ))}
+        </div>
+      )}
+      {!disabled && entries.length > 0 && <FlowLink />}
+      {!disabled && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onRun}
+          className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-ink px-4 text-[13px] font-semibold text-canvas hover:opacity-90 disabled:cursor-default disabled:opacity-40"
+        >
+          {action}
+          <ArrowRight size={14} />
+        </button>
+      )}
     </div>
-  );
-}
-
-/**
- * The choices made, once a step has run: a small centred pill, sized to its
- * text, under the link's arrow, in place of the full-width bar. Toggles that
- * are off and empty or secret fields are left out.
- */
-function Summary<O extends Options>({
-  options,
-  values,
-}: {
-  options: O;
-  values: OptionValues<O>;
-}) {
-  const parts = summarizeOptions(options, values);
-  if (parts.length === 0) return null;
-
-  return (
-    <p
-      aria-label={`Options: ${parts.join(', ')}`}
-      className="flex h-8 max-w-full items-center gap-2 self-center rounded-full bg-canvas px-3.5 text-[13px] font-medium text-ink shadow-node"
-    >
-      <Check size={13} strokeWidth={2.5} className="shrink-0 text-link" />
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {index > 0 && (
-            <span aria-hidden className="text-ink-faint">
-              ·
-            </span>
-          )}
-          <span className="truncate">{part}</span>
-        </Fragment>
-      ))}
-    </p>
   );
 }
 
@@ -131,8 +100,11 @@ export function summarizeOptions<O extends Options>(
 function summarize(setting: Setting, value: SettingValue): string | null {
   switch (setting.kind) {
     case 'select':
+      return setting.summary
+        ? setting.summary(String(value))
+        : String(value) || null;
     case 'info':
-      return String(setting.kind === 'info' ? setting.value : value) || null;
+      return setting.value || null;
     case 'slider':
       return `${setting.label} ${value}%`;
     case 'toggle':
@@ -147,122 +119,193 @@ function summarize(setting: Setting, value: SettingValue): string | null {
   }
 }
 
-const segment =
-  'relative flex h-9 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium whitespace-nowrap';
-const live = 'cursor-pointer';
-
-/** Fields inside a segment: bare, underlined only while typed in. */
+/**
+ * An option in the bar: lit under the pointer, and held lit while its menu
+ * is open, as a menu bar's titles are. Its value may widen it to 128px (the
+ * cap is on the value, below, not on the option); one longer is cut short,
+ * the tooltip saying it all. Its name is never cut: the option is never
+ * narrower than its name, however long, and in a narrow window only the
+ * values give way, so the options stay in one row.
+ */
+const title =
+  'flex cursor-default flex-col items-start rounded-[12px] px-2.5 py-2 text-left whitespace-nowrap enabled:hover:bg-ink/[0.07] aria-expanded:bg-ink/[0.12] disabled:opacity-50';
+/** A field inside a menu: a row of its own, as wide as the menu. */
 const field =
-  'h-6 bg-transparent text-ink outline-none select-text placeholder:text-ink-faint focus:underline';
+  'h-[26px] w-full min-w-0 rounded-[7px] bg-canvas/80 px-2 text-ink outline-none select-text placeholder:text-ink-faint focus:ring-2 focus:ring-accent/40 disabled:bg-transparent';
 
-function Segment({
+/** What an option is set to, as its title's tooltip says it. */
+function shownValue(setting: Setting, value: SettingValue) {
+  switch (setting.kind) {
+    case 'slider':
+      return `${value}%`;
+    case 'toggle':
+      return value ? 'On' : 'Off';
+    case 'number':
+      return `${value}${setting.unit ?? ''}`;
+    case 'password':
+      return value ? 'Set' : 'None';
+    case 'info':
+      return setting.value;
+    default:
+      return String(value) || 'None';
+  }
+}
+
+/** One option: its name in the bar, and the menu it opens. */
+function Title({
   setting,
   value,
-  disabled,
+  readOnly,
   onChange,
   onFile,
 }: {
   setting: Setting;
   value: SettingValue;
-  disabled: boolean;
+  readOnly: boolean;
   onChange: (value: SettingValue) => void;
   onFile: (file: File) => void;
 }) {
   const picker = useRef<HTMLInputElement>(null);
+  const menu = {
+    label: setting.label,
+    hint: `${setting.label}: ${shownValue(setting, value)}`,
+    align: 'start' as const,
+    // Once run, it shows what was chosen but no longer opens.
+    disabled: readOnly,
+    className: title,
+    // Its name, ending in a chevron as it opens a menu, and what it is set
+    // to beneath, in a softer grey.
+    children: (
+      <>
+        <span className="flex items-center gap-1 text-[13px] leading-4 font-medium text-ink">
+          {setting.label}
+          <ChevronDown
+            size={12}
+            strokeWidth={2.25}
+            className="shrink-0 text-ink-faint"
+          />
+        </span>
+        {/* The value fills the option's width but sets none of it, so
+            it is cut short rather than the name... */}
+        <span className="mt-0.5 w-0 min-w-full truncate text-[12px] leading-4 text-ink-soft">
+          {shownValue(setting, value)}
+        </span>
+        {/* ...while this unseen copy widens the option to fit it, up to
+            the cap. It may break anywhere, so it never stops the option
+            narrowing to its name. */}
+        <span
+          aria-hidden
+          className="h-0 max-w-27 overflow-hidden text-[12px] break-all whitespace-normal"
+        >
+          {shownValue(setting, value)}
+        </span>
+      </>
+    ),
+  };
 
   switch (setting.kind) {
     case 'select':
-    case 'slider': {
-      // A slider picks from tens, keeping its own value if it is between.
-      const choices =
-        setting.kind === 'select'
-          ? setting.options.map((option) => [option, option])
-          : [...new Set([...tens, Number(value)])]
-              .sort((a, b) => b - a)
-              .map((option) => [String(option), `${option}%`]);
-      const shown =
-        setting.kind === 'slider' ? `${setting.label} ${value}%` : value;
       return (
         <SelectMenu
-          label={setting.label}
+          {...menu}
           value={String(value)}
-          choices={choices as [string, string][]}
-          disabled={disabled}
-          onChange={(chosen) =>
-            onChange(setting.kind === 'slider' ? Number(chosen) : chosen)
-          }
-          className={`${segment} ${disabled ? 'text-ink-soft' : live}`}
-        >
-          {shown}
-          {!disabled && (
-            <ChevronDown size={12} className="shrink-0 text-ink-faint" />
-          )}
-        </SelectMenu>
+          choices={setting.options.map((option) => [option, option])}
+          onChange={onChange}
+        />
       );
-    }
-    case 'toggle':
-      // On, it reads as chosen, with a tick; off, it fades back.
+    case 'slider':
+      // Picks from tens, keeping its own value if it is between.
       return (
-        <button
-          type="button"
-          role="switch"
-          aria-checked={Boolean(value)}
-          disabled={disabled}
-          onClick={() => onChange(!value)}
-          className={`${segment} ${disabled ? '' : live} ${
-            value ? 'text-ink' : 'text-ink-faint'
-          }`}
-        >
-          {value && <Check size={12} strokeWidth={2.5} />}
-          {setting.label}
-        </button>
+        <SelectMenu
+          {...menu}
+          value={String(value)}
+          choices={[...new Set([...tens, Number(value)])]
+            .sort((a, b) => b - a)
+            .map((option) => [String(option), `${option}%`])}
+          onChange={(chosen) => onChange(Number(chosen))}
+        />
+      );
+    case 'toggle':
+      return (
+        <SelectMenu
+          {...menu}
+          value={value ? 'on' : 'off'}
+          choices={[
+            ['on', 'On'],
+            ['off', 'Off'],
+          ]}
+          onChange={(chosen) => onChange(chosen === 'on')}
+        />
+      );
+    case 'info':
+      // Nothing to choose: the one thing it can be, ticked.
+      return (
+        <SelectMenu
+          {...menu}
+          readOnly
+          value={setting.value}
+          choices={[[setting.value, setting.value]]}
+          onChange={() => {}}
+        />
       );
     case 'number':
-      return (
-        <label className={`${segment} text-ink-soft`}>
-          {setting.label}
-          <input
-            type="number"
-            min={0}
-            disabled={disabled}
-            aria-label={setting.label}
-            value={Number(value)}
-            onChange={(event) => onChange(Number(event.target.value))}
-            className={`${field} w-10 text-right`}
-          />
-          {setting.unit}
-        </label>
-      );
     case 'text':
     case 'password':
+      // A menu holding a field, typed into in place.
       return (
-        <label className={segment}>
-          <input
-            type={setting.kind}
-            disabled={disabled}
-            aria-label={setting.label}
-            value={String(value)}
-            placeholder={setting.placeholder ?? setting.label}
-            onChange={(event) => onChange(event.target.value)}
-            className={`${field} w-28`}
-          />
-        </label>
+        <SelectMenu
+          {...menu}
+          value=""
+          choices={[]}
+          onChange={() => {}}
+          field={
+            <label className="flex min-w-48 items-center gap-1.5 p-[3px] text-ink-soft">
+              <input
+                type={setting.kind}
+                min={setting.kind === 'number' ? 0 : undefined}
+                disabled={readOnly}
+                aria-label={setting.label}
+                value={
+                  setting.kind === 'number' ? Number(value) : String(value)
+                }
+                placeholder={
+                  setting.kind === 'number'
+                    ? undefined
+                    : (setting.placeholder ?? setting.label)
+                }
+                onChange={(event) =>
+                  onChange(
+                    setting.kind === 'number'
+                      ? Number(event.target.value)
+                      : event.target.value,
+                  )
+                }
+                className={field}
+              />
+              {setting.kind === 'number' && setting.unit}
+            </label>
+          }
+        />
       );
     case 'file':
+      // The file chosen, ticked, and an item to choose another.
       return (
         <>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => picker.current?.click()}
-            className={`${segment} ${disabled ? '' : live} ${
-              value ? '' : 'text-ink-soft'
-            }`}
-          >
-            <span className="max-w-32 truncate">
-              {String(value) || `${setting.label}…`}
-            </span>
-          </button>
+          <SelectMenu
+            {...menu}
+            value={String(value)}
+            choices={[
+              ...(value
+                ? [[String(value), String(value)] as [string, string]]
+                : []),
+              ...(readOnly
+                ? []
+                : [[chooseFile, 'Choose File…'] as [string, string]]),
+            ]}
+            onChange={(chosen) => {
+              if (chosen === chooseFile) picker.current?.click();
+            }}
+          />
           <input
             ref={picker}
             type="file"
@@ -279,18 +322,12 @@ function Segment({
           />
         </>
       );
-    case 'info':
-      return (
-        <span
-          title={`${setting.label}: ${setting.value}`}
-          className={`${segment} text-ink-soft`}
-        >
-          {setting.value}
-        </span>
-      );
     default:
       return null;
   }
 }
+
+/** The file menu's "Choose File…": a value no file name can be. */
+const chooseFile = '\u0000choose';
 
 const tens = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10];

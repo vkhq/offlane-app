@@ -4,6 +4,7 @@
 //   2. validates its arguments, treating the renderer as untrusted input,
 //      so markup in a video title can never become yt-dlp options;
 //   3. answers with an { ok, value | error } envelope.
+import { cleanDownloadRequest } from './downloads/requests';
 import {
   BrowserWindow,
   clipboard,
@@ -20,7 +21,6 @@ import { IPC, type IpcResult } from '../shared/ipc';
 import { isStorageItemId, type StorageItemId } from '../shared/storage';
 import { isToolkitId, type ToolkitId } from '../shared/toolkits';
 import type {
-  DownloadRequest,
   FilePreview,
   SessionMeta,
   SessionStatus,
@@ -31,7 +31,6 @@ import type { ExternalTools } from './engine/external';
 import type { Player } from './player';
 import type { StorageInventory } from './storage/inventory';
 import type { SessionStore } from './storage/sessions';
-import { validateUrl } from './engine/args';
 import { installedBrowsers } from './engine/browsers';
 import { ProbeError } from './engine/probe';
 import { fetchThumbnail } from './engine/thumbnail';
@@ -147,34 +146,7 @@ export function registerIpc(deps: IpcDeps): void {
     ) {
       throw new Error('Nothing to download');
     }
-    const clean = requests.map(
-      (request: Partial<DownloadRequest>): DownloadRequest => ({
-        url: validateUrl(String(request?.url ?? '')),
-        // Checked by isQualityPreset in enqueue().
-        quality: request?.quality as DownloadRequest['quality'],
-        subtitles: request?.subtitles === true,
-        // The renderer can't pick folders: only the configured one, which
-        // changes through the native dialog.
-        outputDir: undefined,
-        probeToken: isString(request?.probeToken, 64)
-          ? request.probeToken
-          : undefined,
-        // Shown only until the video is looked up; a thumbnail is fetched
-        // by the main process, and only over https.
-        title: isString(request?.title, 500) ? request.title : undefined,
-        thumbnail:
-          isString(request?.thumbnail, 2048) &&
-          /^https:\/\//i.test(request.thumbnail)
-            ? request.thumbnail
-            : undefined,
-        duration:
-          typeof request?.duration === 'number' &&
-          Number.isFinite(request.duration) &&
-          request.duration > 0
-            ? request.duration
-            : undefined,
-      }),
-    );
+    const clean = requests.map(cleanDownloadRequest);
     return manager.enqueue(clean);
   });
 
@@ -197,18 +169,40 @@ export function registerIpc(deps: IpcDeps): void {
   // images); else, once saved, a frame of the file. Each is fetched once.
   const thumbnails = new Map<string, Promise<string | null>>();
   const frames = new Map<string, Promise<string | null>>();
+  handle(IPC.entryThumbnail, (token: unknown, index: unknown) => {
+    if (!isString(token, 64) || typeof index !== 'number') return null;
+    return manager.entryThumbnail(token, index);
+  });
+  /** A video's own picture from the site it came from, fetched once. */
+  const siteThumbnail = (url: string) => {
+    let image = thumbnails.get(url);
+    if (!image) {
+      image = fetchThumbnail(url, settings.get().proxy).catch(() => null);
+      thumbnails.set(url, image);
+    }
+    return image;
+  };
+  /**
+   * The site's picture for a file, if it was downloaded, or made by a tool
+   * (or several, one after another) from a file that was: so a muted or
+   * compressed download shows the video's own thumbnail, not a frame.
+   */
+  const sourceThumbnail = async (
+    file: string,
+    depth = 0,
+  ): Promise<string | null> => {
+    const download = manager
+      .list()
+      .find((job) => job.status === 'completed' && job.outputPath === file);
+    if (download?.thumbnail) return siteThumbnail(download.thumbnail);
+    const input = deps.tools.inputOf(file);
+    return input && depth < 10 ? sourceThumbnail(input, depth + 1) : null;
+  };
   handle(IPC.downloadPreview, async (id: unknown) => {
     const job = manager.get(assertId(id));
     if (!job) return null;
     if (job.thumbnail) {
-      let image = thumbnails.get(job.thumbnail);
-      if (!image) {
-        image = fetchThumbnail(job.thumbnail, settings.get().proxy).catch(
-          () => null,
-        );
-        thumbnails.set(job.thumbnail, image);
-      }
-      const found = await image;
+      const found = await siteThumbnail(job.thumbnail);
       if (found) return found;
     }
     const file = job.status === 'completed' ? job.outputPath : undefined;
@@ -232,7 +226,7 @@ export function registerIpc(deps: IpcDeps): void {
     if (error) throw new Error(error);
   });
 
-  handle(IPC.preparePlayback, (id: unknown) => {
+  handle(IPC.preparePlayback, (id: unknown, track: unknown) => {
     const job = manager.get(assertId(id));
     if (job?.status !== 'completed' || !job.outputPath) {
       throw new Error('This download has not finished.');
@@ -240,7 +234,18 @@ export function registerIpc(deps: IpcDeps): void {
     if (!existsSync(job.outputPath)) {
       throw new Error('The file is no longer where it was saved.');
     }
-    return deps.player.prepare(job.id, job.outputPath);
+    // The audio was saved chosen language first, then the original.
+    return deps.player.prepare(
+      job.id,
+      job.outputPath,
+      typeof track === 'number' && Number.isInteger(track) && track >= 0
+        ? track
+        : 0,
+      {
+        languages: [job.audioLanguage, job.originalLanguage],
+        original: job.originalLanguage,
+      },
+    );
   });
   handle(IPC.cancelPlayback, (id: unknown) => deps.player.cancel(assertId(id)));
 
@@ -436,6 +441,56 @@ export function registerIpc(deps: IpcDeps): void {
     const [output] = deps.tools.outputsOf(assertId(id));
     if (output) shell.showItemInFolder(output);
   });
+  // A frame of a finished output, for its card: made once per file.
+  const outputPreviews = new Map<string, Promise<FilePreview>>();
+  handle(IPC.toolsPreview, (id: unknown) => {
+    const [output] = deps.tools.outputsOf(assertId(id));
+    if (!output || !existsSync(output)) {
+      return { thumbnail: null, duration: null };
+    }
+    let preview = outputPreviews.get(output);
+    if (!preview) {
+      // The picture of the video it came from, if that was downloaded;
+      // else a frame of its own. Its length is always its own.
+      preview = Promise.all([
+        deps
+          .previewFile(output)
+          .catch(() => ({ thumbnail: null, duration: null })),
+        sourceThumbnail(output).catch(() => null),
+      ]).then(([own, source]) => ({
+        thumbnail: source ?? own.thumbnail,
+        duration: own.duration,
+      }));
+      outputPreviews.set(output, preview);
+    }
+    return preview;
+  });
+  handle(IPC.toolsOpen, async (id: unknown) => {
+    const [output] = deps.tools.outputsOf(assertId(id));
+    if (!output) return;
+    const error = await shell.openPath(output);
+    if (error) throw new Error(error);
+  });
+  // A tool's output plays in the same player as a download, by the job's
+  // id (both are random UUIDs, so they never clash).
+  handle(IPC.toolsPreparePlayback, (id: unknown, track: unknown) => {
+    const jobId = assertId(id);
+    const [output] = deps.tools.outputsOf(jobId);
+    if (!output) throw new Error('This file is not ready yet.');
+    if (!existsSync(output)) {
+      throw new Error('The file is no longer where it was saved.');
+    }
+    return deps.player.prepare(
+      jobId,
+      output,
+      typeof track === 'number' && Number.isInteger(track) && track >= 0
+        ? track
+        : 0,
+    );
+  });
+  handle(IPC.toolsCancelPlayback, (id: unknown) =>
+    deps.player.cancel(assertId(id)),
+  );
 
   // Toolkits: the page names one by id, and a variant from its offers;
   // where it is downloaded from is the catalog's business, never the page's.

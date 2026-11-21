@@ -37,6 +37,8 @@ import {
 import { ytdlpAgeDays } from '../shared/externalTools';
 import { classifyError, reason } from '../main/engine/errors';
 import { toProbeResult } from '../main/engine/probe';
+import { Player } from '../main/player';
+import { cleanDownloadRequest } from '../main/downloads/requests';
 import { parseLine, ProgressTracker } from '../main/engine/progress';
 import type { ToolkitRelease } from '../main/toolkits/catalog';
 import { FEED, parseFeed, verifyFeed } from '../main/toolkits/feed';
@@ -71,6 +73,7 @@ import {
 } from '../shared/tools';
 import { options as convertAudioOptions } from '../tools/audio/convert-audio/options';
 import compressVideo from '../tools/video/compress-video/handler';
+import muteVideo from '../tools/video/mute-video/handler';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
 import { resolveOutputs } from '../main/tools/outputs';
@@ -368,11 +371,11 @@ describe('download options from a lookup', () => {
       subtitles: { en: [], live_chat: [] },
     });
     assert.deepEqual(found.subtitleLanguages, ['en']);
-    assert.ok(optionsFor(found, 'Video').options.subtitles);
+    assert.ok(optionsFor(found, 'Video').options.subtitleTrack);
     const { options, audio } = optionsFor(found, 'Audio Only');
     assert.equal(audio, true);
     assert.equal(options.quality, undefined);
-    assert.equal(options.subtitles, undefined);
+    assert.equal(options.subtitleTrack, undefined);
   });
 
   test('a link with one kind of stream offers no Download choice', () => {
@@ -391,20 +394,206 @@ describe('download options from a lookup', () => {
     assert.equal(choices(silent.options, 'download'), 'info');
   });
 
-  test('subtitles show only when English is on offer', () => {
-    const french = video({ formats: [stream(720)], subtitles: { fr: [] } });
-    assert.equal(optionsFor(french, 'Video').options.subtitles, undefined);
-    const british = video({
+  test('subtitles offer every language there is, and none by default', () => {
+    const none = video({ formats: [stream(720)] });
+    assert.equal(optionsFor(none, 'Video').options.subtitleTrack, undefined);
+    const found = video({
       formats: [stream(720)],
-      subtitles: { 'en-GB': [] },
+      subtitles: { fr: [], 'en-GB': [], live_chat: [] },
     });
-    assert.ok(optionsFor(british, 'Video').options.subtitles);
-    // A lookup from an older build, kept with a tab, lists no languages.
-    const { subtitleLanguages: _, ...older } = british;
+    const { options, subtitleTracks } = optionsFor(found, 'Video');
+    assert.deepEqual(choices(options, 'subtitleTrack'), [
+      'None',
+      'British English',
+      'French',
+    ]);
     assert.equal(
-      optionsFor(older as typeof british, 'Video').options.subtitles,
+      (options.subtitleTrack as unknown as { value: string }).value,
+      'None',
+    );
+    assert.deepEqual(subtitleTracks['French'], {
+      code: 'fr',
+      auto: false,
+    });
+    // A lookup from an older build, kept with a tab, lists no languages.
+    const { subtitleLanguages: _, ...older } = found;
+    assert.equal(
+      optionsFor(older as typeof found, 'Video').options.subtitleTrack,
       undefined,
     );
+  });
+
+  test('captions made from the speech come after written subtitles', () => {
+    const found = video({
+      formats: [stream(720)],
+      subtitles: { fr: [] },
+      // The spoken language, and translations of it, which are left out.
+      automatic_captions: { 'en-orig': [], en: [], de: [], fr: [] },
+    });
+    assert.deepEqual(found.autoCaptionLanguages, ['en-orig']);
+    const { options, subtitleTracks } = optionsFor(found, 'Video');
+    assert.deepEqual(choices(options, 'subtitleTrack'), [
+      'None',
+      'French',
+      'English (Auto-generated)',
+    ]);
+    assert.deepEqual(subtitleTracks['English (Auto-generated)'], {
+      code: 'en-orig',
+      auto: true,
+    });
+    // Most videos have only these, and still get the choice.
+    const spokenOnly = video({
+      formats: [stream(720)],
+      automatic_captions: { 'en-orig': [], de: [] },
+    });
+    assert.deepEqual(
+      choices(optionsFor(spokenOnly, 'Video').options, 'subtitleTrack'),
+      ['None', 'English (Auto-generated)'],
+    );
+  });
+
+  test('audio languages are offered when there is more than one', () => {
+    const dubbed = (language: string, note: string, preference: number) => ({
+      ...stream(null, 'none', 'mp4a'),
+      format_id: `audio-${language}`,
+      language,
+      language_preference: preference,
+      format_note: note,
+    });
+    const found = video({
+      formats: [
+        stream(1080, 'avc1', 'none'),
+        dubbed('es-US', 'Spanish (United States)', -1),
+        dubbed('en', 'English original', 10),
+        dubbed('en', 'English original, low', 10),
+      ],
+    });
+    assert.deepEqual(found.audioLanguages, [
+      { code: 'en', original: true },
+      { code: 'es-US', original: false },
+    ]);
+    const { options, audioTracks, originalLanguage } = optionsFor(
+      found,
+      'Video',
+    );
+    // The original first, and chosen unless another is.
+    assert.deepEqual(choices(options, 'audioTrack'), [
+      'English (Original)',
+      'Spanish (United States)',
+    ]);
+    assert.equal(
+      (options.audioTrack as unknown as { value: string }).value,
+      'English (Original)',
+    );
+    assert.equal(audioTracks['Spanish (United States)'], 'es-US');
+    assert.equal(originalLanguage, 'en');
+    // Saving only the audio still picks its language.
+    assert.ok(optionsFor(found, 'Audio Only').options.audioTrack);
+    // One language, or none named: nothing to choose.
+    const single = video({
+      formats: [stream(720), dubbed('en', 'English original', 10)],
+    });
+    assert.equal(optionsFor(single, 'Video').options.audioTrack, undefined);
+    assert.equal(
+      optionsFor(video({ formats: [stream(720)] }), 'Video').options.audioTrack,
+      undefined,
+    );
+  });
+
+  test('the chosen tracks survive from the page to the download', () => {
+    // As the page sends them, through the same check the IPC handler uses.
+    const clean = cleanDownloadRequest({
+      url: 'https://example.com/v',
+      quality: '1080',
+      subtitleLanguage: 'en-orig',
+      subtitleAuto: true,
+      audioLanguage: 'es-US',
+      originalLanguage: 'en',
+    });
+    assert.equal(clean.subtitleLanguage, 'en-orig');
+    assert.equal(clean.subtitleAuto, true);
+    assert.equal(clean.audioLanguage, 'es-US');
+    assert.equal(clean.originalLanguage, 'en');
+    // Anything that isn't a language code goes no further.
+    const sneaky = cleanDownloadRequest({
+      url: 'https://example.com/v',
+      quality: '1080',
+      subtitleLanguage: 'en.*,--exec=rm',
+      audioLanguage: 'en]+ba',
+    });
+    assert.equal(sneaky.subtitleLanguage, undefined);
+    assert.equal(sneaky.audioLanguage, undefined);
+  });
+
+  test('the chosen tracks are what yt-dlp is asked for', () => {
+    const argsFor = (input: {
+      quality?: '1080' | 'audio';
+      subtitleLanguage?: string;
+      audio?: { language?: string; original?: string };
+    }) =>
+      buildDownloadArgs({
+        bin: { ytdlp: 'yt-dlp', ffmpegDir: null, ffmpeg: null, pathDirs: [] },
+        settings: defaultSettings('/out'),
+        quality: input.quality ?? '1080',
+        subtitles: false,
+        subtitleLanguage: input.subtitleLanguage,
+        audio: input.audio,
+        outputDir: '/out',
+        tempDir: '/tmp/job',
+        source: { url: 'https://example.com/v' },
+      });
+    const after = (args: string[], flag: string) =>
+      args[args.indexOf(flag) + 1];
+
+    // A dub: it plays first, the original is saved beside it, and either
+    // falls back to what there is.
+    const dub = argsFor({ audio: { language: 'es-US', original: 'en' } });
+    assert.equal(
+      after(dub, '-f'),
+      'bv*[height<=1080]+ba[language=es-US]+ba[language=en]/' +
+        'bv*[height<=1080]+ba[language=es-US]/' +
+        'bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b',
+    );
+    assert.ok(dub.includes('--audio-multistreams'));
+    // The original chosen: one track, no second.
+    const original = argsFor({ audio: { language: 'en', original: 'en' } });
+    assert.ok(!original.includes('--audio-multistreams'));
+    assert.match(
+      after(original, '-f'),
+      /^bv\*\[height<=1080\]\+ba\[language=en\]\//,
+    );
+    // Audio only: just the language chosen.
+    assert.equal(
+      after(argsFor({ quality: 'audio', audio: { language: 'es-US' } }), '-f'),
+      'ba[language=es-US]/ba/b',
+    );
+    // Nothing chosen: as before.
+    assert.equal(
+      after(argsFor({}), '-f'),
+      'bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b',
+    );
+    assert.ok(!argsFor({}).includes('--write-subs'));
+    // One subtitle language, matched exactly.
+    const subs = argsFor({ subtitleLanguage: 'pt-BR' });
+    assert.ok(subs.includes('--embed-subs'));
+    assert.equal(after(subs, '--sub-langs'), '^pt\\-BR$');
+    assert.ok(subs.includes('--write-subs'));
+    assert.ok(!subs.includes('--write-auto-subs'));
+    // The site's own captions are asked for as such.
+    const auto = buildDownloadArgs({
+      bin: { ytdlp: 'yt-dlp', ffmpegDir: null, ffmpeg: null, pathDirs: [] },
+      settings: defaultSettings('/out'),
+      quality: '1080',
+      subtitles: false,
+      subtitleLanguage: 'en-orig',
+      subtitleAuto: true,
+      outputDir: '/out',
+      tempDir: '/tmp/job',
+      source: { url: 'https://example.com/v' },
+    });
+    assert.ok(auto.includes('--write-auto-subs'));
+    assert.ok(!auto.includes('--write-subs'));
+    assert.equal(after(auto, '--sub-langs'), '^en\\-orig$');
   });
 
   test('a playlist shows its size and the usual choices', () => {
@@ -1548,6 +1737,80 @@ describe('tool queue', () => {
     );
   });
 
+  test('finished runs are still listed after a restart', async () => {
+    const file = path.join(tmp, 'tool-runs', 'jobs.json');
+    const handlers = {
+      make: {
+        options,
+        run: async (context: {
+          outputPath: (s: string, e: string) => string;
+        }) => {
+          await fs.writeFile(context.outputPath('-made', 'txt'), 'made');
+        },
+      },
+      failing: {
+        options,
+        run: async () => {
+          throw new Error('boom');
+        },
+      },
+    } as unknown as Record<string, ToolHandler>;
+    const open = () =>
+      new ToolQueue({
+        handlers: new Map(Object.entries(handlers)),
+        getFfmpeg: () => null,
+        getOutputDir: outDir,
+        file,
+      });
+
+    const first = open();
+    const [made] = first.run('make', {
+      files: [clip()],
+      links: [],
+      values: {},
+    });
+    const [failed] = first.run('failing', {
+      files: [clip()],
+      links: [],
+      values: {},
+    });
+    // Both waited on before either can finish unheard.
+    const [madeDone, failedDone] = await Promise.all([
+      settled(first, made.id),
+      settled(first, failed.id),
+    ]);
+    assert.equal(madeDone.status, 'done', madeDone.error ?? '');
+    assert.equal(failedDone.status, 'failed');
+
+    // As after the app restarts: the same runs, with their outputs.
+    const second = open();
+    const listed = second.list();
+    assert.deepEqual(
+      listed.map((job) => [job.id, job.status]).sort(),
+      [
+        [made.id, 'done'],
+        [failed.id, 'failed'],
+      ].sort(),
+    );
+    const output = path.join(outDir(), 'clip-made.txt');
+    assert.deepEqual(second.outputsOf(made.id), [output]);
+    // What it was made from, for its card's picture.
+    assert.equal(second.inputOf(output), clip());
+    assert.equal(second.inputOf(path.join(outDir(), 'unknown.txt')), undefined);
+
+    // A finished run whose file has gone is no longer listed.
+    rmSync(output);
+    assert.deepEqual(
+      open()
+        .list()
+        .map((job) => job.id),
+      [failed.id],
+    );
+    // Cleared, nothing is listed after the next restart either.
+    open().clearFinished();
+    assert.deepEqual(open().list(), []);
+  });
+
   test('values are checked against the options', async () => {
     let seen: unknown;
     const tools = queue({
@@ -1662,6 +1925,128 @@ describe('tool queue', () => {
       ]);
       assert.equal(probe.stdout.toString().trim(), 'h264');
       assert.ok(statSync(output).size < statSync(clip()).size);
+    },
+  );
+
+  test(
+    'Mute Video drops the sound, and the subtitles only if asked',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'mute');
+      await fs.mkdir(dir, { recursive: true });
+      const loud = path.join(dir, 'loud.mov');
+      const silent = path.join(dir, 'silent.mp4');
+      const srt = path.join(dir, 'captions.srt');
+      await fs.writeFile(srt, '1\n00:00:00,000 --> 00:00:02,000\nHello\n');
+      // Video, sound and a subtitle track.
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=320x240:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=4',
+        '-i',
+        srt,
+        '-map',
+        '0',
+        '-map',
+        '1',
+        '-map',
+        '2',
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-c:s',
+        'mov_text',
+        '-shortest',
+        loud,
+      ]);
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=320x240:rate=25',
+        '-c:v',
+        'mpeg4',
+        silent,
+      ]);
+      /** Each stream as `codec_type,codec_name`, and the length. */
+      const streamsOf = (file: string) => {
+        const lines = spawnSync(vendorFfprobe, [
+          '-v',
+          'error',
+          '-show_entries',
+          'stream=codec_type,codec_name:format=duration',
+          '-of',
+          'csv=p=0',
+          file,
+        ])
+          .stdout.toString()
+          .trim()
+          .split('\n');
+        return {
+          streams: lines.slice(0, -1).map((line) => line.trim()),
+          duration: Number(lines.at(-1)),
+        };
+      };
+
+      const tools = queue({ 'mute-video': muteVideo });
+      const jobs = tools.run('mute-video', {
+        files: [loud, silent],
+        links: [],
+        values: {},
+      });
+      const [fromLoud, fromSilent] = await Promise.all(
+        jobs.map((job) => settled(tools, job.id)),
+      );
+
+      // The same kind of file, with the video and the subtitles: by
+      // default only the sound goes.
+      assert.equal(fromLoud.status, 'done', fromLoud.error ?? '');
+      assert.deepEqual(fromLoud.outputs, ['loud-muted.mov']);
+      assert.equal(fromLoud.note, undefined);
+      const muted = streamsOf(path.join(outDir(), 'loud-muted.mov'));
+      assert.deepEqual(muted.streams, ['mpeg4,video', 'mov_text,subtitle']);
+      assert.ok(
+        Math.abs(muted.duration - streamsOf(loud).duration) < 0.1,
+        String(muted.duration),
+      );
+
+      // Nothing to take out still succeeds, and says so.
+      assert.equal(fromSilent.status, 'done', fromSilent.error ?? '');
+      assert.deepEqual(fromSilent.outputs, ['silent-muted.mp4']);
+      assert.equal(fromSilent.note, 'This video had no sound.');
+      assert.deepEqual(
+        streamsOf(path.join(outDir(), 'silent-muted.mp4')).streams,
+        ['mpeg4,video'],
+      );
+
+      // With Remove Subtitles, only the video is left.
+      const [bare] = tools.run('mute-video', {
+        files: [loud],
+        links: [],
+        values: { removeSubtitles: true },
+      });
+      const fromBare = await settled(tools, bare.id);
+      assert.equal(fromBare.status, 'done', fromBare.error ?? '');
+      assert.deepEqual(fromBare.outputs, ['loud-muted (2).mov']);
+      assert.deepEqual(
+        streamsOf(path.join(outDir(), 'loud-muted (2).mov')).streams,
+        ['mpeg4,video'],
+      );
+
+      // The other tests here expect the output folder as they left it.
+      for (const name of [
+        ...fromLoud.outputs,
+        ...fromSilent.outputs,
+        ...fromBare.outputs,
+      ]) {
+        rmSync(path.join(outDir(), name));
+      }
     },
   );
 
@@ -2105,6 +2490,139 @@ describe(
         Math.abs((media.duration ?? 0) - length) < 0.1,
         String(media.duration),
       );
+    });
+  },
+);
+
+describe(
+  'player tracks',
+  {
+    skip:
+      (process.platform !== 'darwin' && 'macOS only for now') ||
+      (!existsSync(vendorFfmpeg) && 'no vendor ffmpeg'),
+  },
+  () => {
+    let dir = '';
+    let player: Player;
+    before(() => {
+      dir = path.join(tmp, 'player');
+      player = new Player({
+        getFfmpeg: () => ({ ffmpeg: vendorFfmpeg, ffprobe: vendorFfprobe }),
+        cacheDir: path.join(dir, 'cache'),
+        onProgress: () => {},
+      });
+    });
+    const languagesOf = (file: string) =>
+      spawnSync(vendorFfprobe, [
+        '-v',
+        'error',
+        '-select_streams',
+        'a',
+        '-show_entries',
+        'stream_tags=language',
+        '-of',
+        'csv=p=0',
+        file,
+      ])
+        .stdout.toString()
+        .trim()
+        .split('\n');
+    /** The file a media:// URL serves, read through the player. */
+    const served = async (url: string) =>
+      Buffer.from(await (await player.handle(new Request(url))).arrayBuffer());
+
+    test('a dubbed download plays either track, with its subtitles', async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const srt = path.join(dir, 'captions.srt');
+      await fs.writeFile(srt, '1\n00:00:00,000 --> 00:00:01,500\nHola\n');
+      // As a download with a dub chosen is saved: the dub first, then the
+      // original, and Spanish subtitles.
+      const file = path.join(dir, 'dubbed.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=2:size=320x240:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=300:duration=2',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=600:duration=2',
+        '-i',
+        srt,
+        '-map',
+        '0',
+        '-map',
+        '1',
+        '-map',
+        '2',
+        '-map',
+        '3',
+        '-c:v',
+        'h264_videotoolbox',
+        '-c:a',
+        'aac',
+        '-c:s',
+        'mov_text',
+        '-metadata:s:a:0',
+        'language=spa',
+        '-metadata:s:a:1',
+        'language=eng',
+        '-metadata:s:s:0',
+        'language=spa',
+        file,
+      ]);
+      const hints = { languages: ['es', 'en'], original: 'en' };
+
+      const first = await player.prepare('dub', file, 0, hints);
+      assert.deepEqual(first.audioTracks, [
+        { label: 'Spanish', original: false },
+        { label: 'English', original: true },
+      ]);
+      assert.equal(first.audioTrack, 0);
+      assert.equal(first.subtitles.length, 1);
+      assert.equal(first.subtitles[0].label, 'Spanish');
+      assert.equal(first.subtitles[0].language, 'es');
+      assert.match(first.subtitles[0].vtt, /^WEBVTT[\s\S]*Hola/);
+
+      // Each track is a copy with only that audio, so Chromium plays it.
+      const firstCopy = path.join(dir, 'first.mp4');
+      await fs.writeFile(firstCopy, await served(first.url));
+      assert.deepEqual(languagesOf(firstCopy), ['spa']);
+      const second = await player.prepare('dub', file, 1, hints);
+      assert.equal(second.audioTrack, 1);
+      assert.notEqual(second.url, first.url);
+      const secondCopy = path.join(dir, 'second.mp4');
+      await fs.writeFile(secondCopy, await served(second.url));
+      assert.deepEqual(languagesOf(secondCopy), ['eng']);
+    });
+
+    test('a plain download plays as it is, with no tracks to choose', async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const file = path.join(dir, 'plain.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=160x120:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=duration=1',
+        '-c:v',
+        'h264_videotoolbox',
+        '-c:a',
+        'aac',
+        '-shortest',
+        file,
+      ]);
+      const source = await player.prepare('plain', file);
+      assert.equal(source.prepared, 'direct');
+      assert.deepEqual(source.audioTracks, []);
+      assert.deepEqual(source.subtitles, []);
     });
   },
 );

@@ -95,7 +95,17 @@ export type Job = {
   url: string;
   status: JobStatus;
   quality: QualityPreset;
+  /** English subtitles, as a playlist's downloads ask for them. */
   subtitles: boolean;
+  /** The one subtitle language chosen, as the site codes it ("es"). */
+  subtitleLanguage?: string;
+  /** `subtitleLanguage` is captions the site made, not subtitles. */
+  subtitleAuto?: boolean;
+  /** The audio language chosen, played first. */
+  audioLanguage?: string;
+  /** The video's original audio language, saved too when it isn't the one
+   *  chosen, so the player can switch to it. */
+  originalLanguage?: string;
   outputDir: string;
   createdAt: number;
   updatedAt: number;
@@ -126,7 +136,14 @@ export type FormatSummary = {
   hasVideo: boolean;
   hasAudio: boolean;
   size: number | null;
+  /** The language of its audio, as the site codes it ("es", "en-US"). */
+  language?: string | null;
+  /** Its audio is in the video's original language, not a dub. */
+  original?: boolean;
 };
+
+/** An audio language a video offers. */
+export type AudioLanguage = { code: string; original: boolean };
 
 export type VideoInfo = {
   kind: 'video';
@@ -151,6 +168,12 @@ export type VideoInfo = {
   availableHeights: number[];
   /** Languages with subtitles the site wrote, not automatic captions. */
   subtitleLanguages: string[];
+  /** Captions made from the speech, in the language spoken, as the site
+   *  codes them ("en-orig"). Missing from a lookup from an older build. */
+  autoCaptionLanguages?: string[];
+  /** The languages its audio comes in, the original first; empty when the
+   *  site doesn't say. Missing from a lookup kept from an older build. */
+  audioLanguages?: AudioLanguage[];
 };
 
 export type PlaylistEntry = {
@@ -181,6 +204,10 @@ export type DownloadRequest = {
   url: string;
   quality: QualityPreset;
   subtitles?: boolean;
+  subtitleLanguage?: string;
+  subtitleAuto?: boolean;
+  audioLanguage?: string;
+  originalLanguage?: string;
   /** Set by the main process only; the renderer cannot choose folders. */
   outputDir?: string;
   /** From a fresh probe, so the job can skip probing again. */
@@ -244,6 +271,26 @@ export type PlaybackSource = {
   prepared: 'direct' | 'remux' | 'transcode';
   /** Width over height of its picture, as shown; null for audio or if unknown. */
   aspect: number | null;
+  /** The file's audio tracks, in its order; empty if it has one or none. */
+  audioTracks: PlaybackTrack[];
+  /** Which of `audioTracks` this URL plays. */
+  audioTrack: number;
+  /** Its subtitle tracks, as WebVTT text, for a <track> element. */
+  subtitles: PlaybackSubtitles[];
+};
+
+export type PlaybackTrack = {
+  /** "Spanish", or "Track 2" when the file doesn't say. */
+  label: string;
+  /** The video's original language, not a dub. */
+  original: boolean;
+};
+
+export type PlaybackSubtitles = {
+  label: string;
+  /** The language code, for the <track>'s srclang; '' if unknown. */
+  language: string;
+  vtt: string;
 };
 
 /** How a rewrap or re-encode for playback is going. */
@@ -277,10 +324,17 @@ export type DownloaderApi = {
    * else a frame of the saved file; null if neither yet.
    */
   preview(id: string): Promise<string | null>;
+  /**
+   * The thumbnail of video `index` of the playlist a lookup found, as a
+   * data: URL; null if it has none, can't be had, or the lookup has expired.
+   */
+  entryThumbnail(probeToken: string, index: number): Promise<string | null>;
   /** Opens a finished download in its default app. */
   openFile(id: string): Promise<void>;
   /** Makes a finished download playable in the app (see main/player.ts). */
-  preparePlayback(id: string): Promise<PlaybackSource>;
+  /** Readies a finished download to play, with audio track `audioTrack`
+   *  (the first by default). */
+  preparePlayback(id: string, audioTrack?: number): Promise<PlaybackSource>;
   /** Stops preparing, when the player closes first. */
   cancelPlayback(id: string): Promise<void>;
   onPlaybackProgress(cb: (progress: PlaybackProgress) => void): () => void;

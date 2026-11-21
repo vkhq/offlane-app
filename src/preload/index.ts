@@ -73,8 +73,11 @@ const downloader: DownloaderApi = {
   remove: (id) => call(IPC.remove, id),
   revealFile: (id) => call(IPC.revealFile, id),
   preview: (id) => call(IPC.downloadPreview, id),
+  entryThumbnail: (probeToken, index) =>
+    call(IPC.entryThumbnail, probeToken, index),
   openFile: (id) => call(IPC.openFile, id),
-  preparePlayback: (id) => call(IPC.preparePlayback, id),
+  preparePlayback: (id, audioTrack) =>
+    call(IPC.preparePlayback, id, audioTrack),
   cancelPlayback: (id) => call(IPC.cancelPlayback, id),
   onPlaybackProgress: (cb) => on<PlaybackProgress>(IPC.playbackProgress, cb),
   copyDebugInfo: (id) => call(IPC.copyDebugInfo, id),
@@ -130,6 +133,13 @@ const tools: ToolsApi = {
   cancel: (id) => call(IPC.toolsCancel, id),
   remove: (id) => call(IPC.toolsRemove, id),
   reveal: (id) => call(IPC.toolsReveal, id),
+  open: (id) => call(IPC.toolsOpen, id),
+  preview: (id) => call(IPC.toolsPreview, id),
+  preparePlayback: (id, audioTrack) =>
+    call(IPC.toolsPreparePlayback, id, audioTrack),
+  cancelPlayback: (id) => call(IPC.toolsCancelPlayback, id),
+  // The same channel as downloads': the player reports either by job id.
+  onPlaybackProgress: (cb) => on<PlaybackProgress>(IPC.playbackProgress, cb),
   onJob: (cb) => on<ToolJob>(IPC.toolJobUpdated, cb),
   onJobRemoved: (cb) => on<string>(IPC.toolJobRemoved, cb),
 };

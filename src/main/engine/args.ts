@@ -123,17 +123,38 @@ export function buildProbeArgs(url: string, opts: CommonOptions): string[] {
 export function formatArgs(
   quality: QualityPreset,
   preferCompatible: boolean,
+  audio: AudioChoice = {},
 ): string[] {
+  const chosen = audio.language ? `ba[language=${audio.language}]` : null;
   // Best audio-only stream, else a combined file; -x keeps the audio track.
-  if (quality === 'audio') return ['-f', 'ba/b', '-x'];
+  // The language chosen first, if it can be had.
+  if (quality === 'audio') {
+    return ['-f', [chosen, 'ba', 'b'].filter(Boolean).join('/'), '-x'];
+  }
 
   // Best video + best audio merged by ffmpeg, else the best single file. A
   // capped height falls back to whatever exists rather than failing.
-  const selector =
+  const video = quality === 'best' ? 'bv*' : `bv*[height<=${quality}]`;
+  const fallback =
     quality === 'best'
       ? 'bv*+ba/b'
       : `bv*[height<=${quality}]+ba/b[height<=${quality}]/bv*+ba/b`;
+  // A language chosen: that audio, and the original beside it when that is
+  // another, so the player can switch back. Either way the chosen one comes
+  // first, so it plays by default.
+  const original =
+    chosen && audio.original && audio.original !== audio.language
+      ? `ba[language=${audio.original}]`
+      : null;
+  const selector = [
+    original && `${video}+${chosen}+${original}`,
+    chosen && `${video}+${chosen}`,
+    fallback,
+  ]
+    .filter(Boolean)
+    .join('/');
   const args = ['-f', selector];
+  if (original) args.push('--audio-multistreams');
   // Highest resolution first, then H.264 + AAC, which play everywhere.
   if (preferCompatible) args.push('-S', 'res,vcodec:h264,acodec:aac');
   // MP4 when the codecs allow it, otherwise MKV, which holds anything.
@@ -141,10 +162,20 @@ export function formatArgs(
   return args;
 }
 
+/** The audio asked for: a language as the site codes it, and the video's
+ *  original language, kept too when it is another. */
+export type AudioChoice = { language?: string; original?: string };
+
 export type DownloadArgsInput = CommonOptions & {
   settings: Settings;
   quality: QualityPreset;
+  /** English subtitles (a playlist's choice). */
   subtitles: boolean;
+  /** One subtitle language, as the site codes it; takes over `subtitles`. */
+  subtitleLanguage?: string;
+  /** `subtitleLanguage` is the site's automatic captions. */
+  subtitleAuto?: boolean;
+  audio?: AudioChoice;
   outputDir: string;
   /** Per-job folder for .part files, so pause/resume and cleanup are easy. */
   tempDir: string;
@@ -157,7 +188,7 @@ export function buildDownloadArgs(input: DownloadArgsInput): string[] {
   const { settings, quality, outputDir, tempDir, source, isLive } = input;
   const args = commonArgs(input);
 
-  args.push(...formatArgs(quality, settings.preferCompatible));
+  args.push(...formatArgs(quality, settings.preferCompatible, input.audio));
   args.push(
     '-P',
     outputDir,
@@ -177,8 +208,21 @@ export function buildDownloadArgs(input: DownloadArgsInput): string[] {
 
   if (settings.rateLimit) args.push('--limit-rate', settings.rateLimit);
   if (settings.embedMetadata) args.push('--embed-metadata', '--embed-chapters');
-  if (input.subtitles && quality !== 'audio') {
-    args.push('--write-subs', '--embed-subs', '--sub-langs', 'en.*,-live_chat');
+  // --sub-langs takes regular expressions; a code is matched exactly.
+  const subLangs = input.subtitleLanguage
+    ? `^${input.subtitleLanguage.replace(/[^A-Za-z0-9]/g, '\\$&')}$`
+    : input.subtitles
+      ? 'en.*,-live_chat'
+      : null;
+  if (subLangs && quality !== 'audio') {
+    args.push(
+      input.subtitleLanguage && input.subtitleAuto
+        ? '--write-auto-subs'
+        : '--write-subs',
+      '--embed-subs',
+      '--sub-langs',
+      subLangs,
+    );
   }
   // MPEG-TS survives being stopped mid-stream; MP4 would be unreadable.
   if (isLive) args.push('--hls-use-mpegts');

@@ -6,7 +6,9 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { canonicalLanguage } from '../../shared/languages';
 import type {
+  AudioLanguage,
   FormatSummary,
   JobError,
   PlaylistEntry,
@@ -56,6 +58,15 @@ function summarizeFormats(info: Json) {
       hasVideo: vcodec !== 'none',
       hasAudio: acodec !== 'none',
       size: numOrNull(format.filesize) ?? numOrNull(format.filesize_approx),
+      // As the site writes it: yt-dlp is later asked for this exact code.
+      language: canonicalLanguage(str(format.language))
+        ? str(format.language)
+        : null,
+      // YouTube ranks the original audio at 10 and says so in the note;
+      // a dub is lower.
+      original:
+        numOrNull(format.language_preference) === 10 ||
+        /\boriginal\b/i.test(str(format.format_note) ?? ''),
     };
   });
   const heights = [
@@ -65,7 +76,22 @@ function summarizeFormats(info: Json) {
       ),
     ),
   ].sort((a, b) => b - a);
-  return { formats, heights };
+  return { formats, heights, audioLanguages: audioLanguagesOf(formats) };
+}
+
+/** The languages a video's audio comes in, each once, the original first. */
+function audioLanguagesOf(formats: FormatSummary[]): AudioLanguage[] {
+  const found = new Map<string, boolean>();
+  for (const format of formats) {
+    if (!format.hasAudio || !format.language) continue;
+    found.set(
+      format.language,
+      (found.get(format.language) ?? false) || format.original === true,
+    );
+  }
+  return [...found]
+    .map(([code, original]) => ({ code, original }))
+    .sort((a, b) => Number(b.original) - Number(a.original));
 }
 
 type Thumbnail = { url: string; width: number; height: number };
@@ -124,6 +150,17 @@ function uploadedAt(info: Json): number | null {
   const date = str(info.upload_date);
   const match = date && /^(\d{4})(\d{2})(\d{2})$/.exec(date);
   return match ? Date.UTC(+match[1], +match[2] - 1, +match[3]) : null;
+}
+
+/**
+ * Captions the site made by recognising the speech, in the language
+ * spoken. YouTube lists these as "<language>-orig", beside machine
+ * translations of them into every other language, which are left out.
+ */
+function autoCaptionLanguages(info: Json): string[] {
+  const captions = info.automatic_captions;
+  if (typeof captions !== 'object' || captions === null) return [];
+  return Object.keys(captions).filter((language) => language.endsWith('-orig'));
 }
 
 /** Subtitle languages on offer, leaving out YouTube's live chat replay. */
@@ -186,7 +223,7 @@ export function toProbeResult(url: string, info: Json): ProbeResult {
     };
   }
 
-  const { formats, heights } = summarizeFormats(info);
+  const { formats, heights, audioLanguages } = summarizeFormats(info);
   return {
     kind: 'video',
     url: str(info.webpage_url) ?? url,
@@ -204,6 +241,8 @@ export function toProbeResult(url: string, info: Json): ProbeResult {
     formats,
     availableHeights: heights,
     subtitleLanguages: subtitleLanguages(info),
+    autoCaptionLanguages: autoCaptionLanguages(info),
+    audioLanguages,
   };
 }
 

@@ -1,8 +1,8 @@
-import { dropVideos, standardTool } from '../../ui';
+import { dropVideos, standardTool, withSizes } from '../../ui';
 import { options } from './options';
 
 export default standardTool({
-  input: dropVideos(),
+  input: withSizes(dropVideos()),
   options,
   action: 'Compress',
 });

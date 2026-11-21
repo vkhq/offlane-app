@@ -1,25 +1,83 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  type RefObject,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 
-import { Plus } from '../components/icons';
+import { ArrowRight } from '../components/icons';
 import { type Tool, toolGroups, tools } from '../tools';
+import { canvasMoveEvent } from './Canvas';
 import { useConnectedIds } from './jobs';
-import { type StepInput, useSteps } from './steps';
+import { StageContext, type StepInput, useSteps } from './steps';
 
-/** How many tools show as chips; the rest are under More…. */
-const shown = 3;
-
+/** The black What's Next? button under a single result: a step of the
+ *  flow in its own right. */
+const nextButton =
+  'inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-linear-to-b from-neutral-600 to-neutral-950 px-4 text-[13px] font-medium text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.2),0_6px_16px_rgb(0_0_0/0.22)] ring-4 ring-ink/8 transition-[filter,scale] hover:brightness-125 active:scale-[0.98]';
+/** Under each of several results: a plain chip, quiet in its row. */
 const chip =
-  'inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium ring-1 ring-black/10 ring-inset hover:bg-ink/5';
+  'inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[12px] font-medium text-ink-soft ring-1 ring-black/10 ring-inset hover:bg-ink/5 hover:text-ink aria-expanded:bg-ink/5 aria-expanded:text-ink';
+
+/** Marks a What's Next? list, wherever it is drawn. */
+const menuAttribute = 'data-next-menu';
 
 /**
- * The tools a run's outputs can go on to: picking one adds a step below, on
- * the same page, with these outputs as its input (it runs once per output,
+ * Whether a What's Next? menu is open, and the element its button lives in:
+ * a press outside both, or Escape, closes it. It also closes when the
+ * page scrolls or the canvas moves, as it would no longer sit by its
+ * button.
+ */
+function useMenu() {
+  const [open, setOpen] = useState(false);
+  const wrapper = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const inside = (target: EventTarget | null) =>
+      target instanceof Node &&
+      (wrapper.current?.contains(target) ||
+        (target instanceof Element
+          ? target.closest(`[${menuAttribute}]`)
+          : target.parentElement?.closest(`[${menuAttribute}]`)));
+    const onDown = (event: PointerEvent) => {
+      if (!inside(event.target)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    const onMove = (event: Event) => {
+      if (!inside(event.target)) setOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    const onCanvas = () => setOpen(false);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    window.addEventListener(canvasMoveEvent, onCanvas);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener(canvasMoveEvent, onCanvas);
+    };
+  }, [open]);
+  return { open, setOpen, wrapper };
+}
+
+/**
+ * The tools a run's outputs can go on to: picking one adds a step as a
+ * branch below the stage they came from, with these outputs as its input (it runs once per output,
  * as for several dropped files). Tools that work first, then those in the
  * same group as the tool that made them, then by name. Outputs of mixed
  * kinds offer what takes the first one's kind, for those of that kind.
  */
 function useNext(all: StepInput[], from?: Tool) {
   const steps = useSteps();
+  const stage = useContext(StageContext);
   const connected = useConnectedIds() ?? [];
   const kind = all[0]?.kind;
   const outputs = all.filter((output) => output.kind === kind);
@@ -33,54 +91,16 @@ function useNext(all: StepInput[], from?: Tool) {
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   if (next.length === 0) return null;
 
-  const start = (tool: Tool) => steps.add(tool.id, outputs);
-  const more = async () => {
-    const choice = await window.app.contextMenu(
-      next.slice(shown).map((tool) => ({ id: tool.id, label: tool.name })),
-    );
-    const tool = next.find((candidate) => candidate.id === choice);
-    if (tool) start(tool);
-  };
-  /** Whether a step already works on these outputs. */
-  const taken = steps.steps.some((step) =>
-    step.inputs.some((input) =>
-      outputs.some((output) => output.jobId === input.jobId),
-    ),
-  );
-  return { next, start, more, taken, outputs };
+  const start = (tool: Tool) => steps.add(tool.id, outputs, stage);
+  return { next, start, outputs };
 }
 
-function Chips({
-  next,
-  start,
-  more,
-}: Pick<NonNullable<ReturnType<typeof useNext>>, 'next' | 'start' | 'more'>) {
-  return (
-    <>
-      {next.slice(0, shown).map((tool) => {
-        const Icon = tool.icon;
-        return (
-          <button
-            key={tool.id}
-            type="button"
-            onClick={() => start(tool)}
-            className={chip}
-          >
-            <Icon size={14} />
-            {tool.name}
-          </button>
-        );
-      })}
-      {next.length > shown && (
-        <button type="button" onClick={() => void more()} className={chip}>
-          More…
-        </button>
-      )}
-    </>
-  );
-}
-
-/** The next tools as chips in a line, under one of several results. */
+/**
+ * Under one of several results: a What's Next? chip, which opens the same
+ * list as the button under a single result does, floating over the page so
+ * the results stay as they are. Picking a tool adds its step below,
+ * working on this result's outputs.
+ */
 export function NextSteps({
   outputs,
   from,
@@ -90,21 +110,43 @@ export function NextSteps({
   from?: Tool;
 }) {
   const next = useNext(outputs, from);
+  const { open, setOpen, wrapper } = useMenu();
+  const button = useRef<HTMLButtonElement>(null);
   if (!next) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-      <span className="pr-0.5 text-xs text-ink-soft">Do more with it:</span>
-      <Chips {...next} />
+    <div ref={wrapper} className="pt-2">
+      <button
+        ref={button}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((shown) => !shown)}
+        className={chip}
+      >
+        What’s next?
+        <ArrowRight size={12} strokeWidth={2.25} />
+      </button>
+      {open && (
+        <NextToolsMenu
+          anchor={button}
+          tools={next.next}
+          onPick={(tool) => {
+            setOpen(false);
+            next.start(tool);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 /**
- * The next tools as a workflow step of their own, under a single result:
+ * The next tools as a workflow step of their own, under a stage's results:
  * the flow runs on to a black What's Next? button, which opens a list of
  * the tools that take these outputs as their input: a search field, and the
- * tools by group, each with what it does. Picking one adds
- * its step right below, starting with these outputs, in this one's place.
+ * tools by group. Picking one adds its step as a branch below, starting
+ * with these outputs. It stays once there are branches, to add another:
+ * they fork from it.
  */
 export function NextStepNode({
   outputs,
@@ -114,44 +156,29 @@ export function NextStepNode({
   from?: Tool;
 }) {
   const next = useNext(outputs, from);
-  const [open, setOpen] = useState(false);
-  const wrapper = useRef<HTMLDivElement>(null);
+  const { open, setOpen, wrapper } = useMenu();
+  const button = useRef<HTMLButtonElement>(null);
 
-  // A press outside the list, or Escape, closes it.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  if (!next || next.taken) return null;
+  if (!next) return null;
   return (
     <div className="flex flex-col items-center pt-1.5">
       <span className="flow-joint" />
       <span className="flow-line h-6 animate-grow-down" />
       <div ref={wrapper} className="flex flex-col items-center">
         <button
+          ref={button}
           type="button"
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((shown) => !shown)}
-          className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-linear-to-b from-neutral-600 to-neutral-950 px-4 text-[13px] font-medium text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.2),0_6px_16px_rgb(0_0_0/0.22)] ring-4 ring-ink/8 transition-[filter,scale] hover:brightness-125 active:scale-[0.98]"
+          className={nextButton}
         >
-          <Plus size={14} strokeWidth={2.25} />
           What’s next?
+          <ArrowRight size={14} strokeWidth={2.25} />
         </button>
         {open && (
           <NextToolsMenu
+            anchor={button}
             tools={next.next}
             onPick={(tool) => {
               setOpen(false);
@@ -174,17 +201,57 @@ export function NextStepNode({
 function NextToolsMenu({
   tools: offered,
   onPick,
+  anchor,
 }: {
   tools: Tool[];
   onPick: (tool: Tool) => void;
+  /** The button it opens from: it floats beside it, over the page. */
+  anchor: RefObject<HTMLElement | null>;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  /** Brings it whole into view, once it has settled where it opens. */
-  const reveal = () =>
-    panel.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+  // It opens to the right of its button, so it's clear which
+  // one opened it: its top level with the button's, moved up only as far
+  // as it must to stay in the window, and shorter (its list scrolling) if
+  // the window is shorter than it.
+  const [place, setPlace] = useState<{
+    left: number;
+    top: number;
+    maxHeight: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const button = anchor.current;
+    if (!button || !panel.current) return;
+    // At least this far from every edge of the window.
+    const margin = 36;
+    const gap = 8;
+    const at = button.getBoundingClientRect();
+    const { offsetWidth: width, offsetHeight: height } = panel.current;
+    // Its own cap (max-h-[26rem]) still holds: measured under it, it must
+    // not then grow past it.
+    const cap = Number.parseFloat(getComputedStyle(panel.current).maxHeight);
+    const maxHeight = Math.min(
+      Number.isFinite(cap) ? cap : height,
+      window.innerHeight - margin * 2,
+    );
+    const shown = Math.min(height, maxHeight);
+    setPlace({
+      // In a window too narrow for it beside the button, as far right as
+      // it can go.
+      left: Math.max(
+        margin,
+        Math.min(at.right + gap, window.innerWidth - width - margin),
+      ),
+      top: Math.max(
+        margin,
+        Math.min(at.top, window.innerHeight - shown - margin),
+      ),
+      maxHeight,
+    });
+  }, [anchor]);
 
   const needle = query.trim().toLowerCase();
   const matching = offered.filter((tool) =>
@@ -224,17 +291,19 @@ function NextToolsMenu({
     `flex h-10 w-full cursor-default items-center gap-3 rounded-[12px] px-3 text-left text-[14px] ${
       on ? 'bg-white/10' : ''
     }`;
-  return (
+  const menu = (
     <div
       ref={panel}
       role="menu"
       aria-label="Tools to use next"
-      onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget) reveal();
-      }}
-      // In the page's flow, with 150px clear below it, so the page can
-      // always scroll it whole into view.
-      className="mt-3 mb-[150px] flex max-h-[26rem] w-72 origin-top animate-pop-in scroll-mb-[150px] flex-col overflow-hidden rounded-[22px] bg-neutral-800 text-left text-white shadow-popup"
+      {...{ [menuAttribute]: '' }}
+      // Hidden until it has been placed.
+      style={
+        place
+          ? { left: place.left, top: place.top, maxHeight: place.maxHeight }
+          : { left: 0, top: 0, visibility: 'hidden' }
+      }
+      className="fixed z-50 flex max-h-[26rem] w-72 origin-left animate-pop-in flex-col overflow-hidden rounded-[22px] bg-neutral-800 text-left text-white shadow-popup"
     >
       <div className="shrink-0 px-5 pt-4">
         <input
@@ -300,4 +369,6 @@ function NextToolsMenu({
       </div>
     </div>
   );
+  // Drawn over everything, so nothing on the page clips or scales it.
+  return createPortal(menu, document.body);
 }

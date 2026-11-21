@@ -23,6 +23,8 @@ import {
   X,
 } from '../components/icons';
 import { UrlInput } from '../components/UrlInput';
+import { itemPreview } from '../sessions';
+import { type MediaItem, MediaStrip } from './MediaStrip';
 import type { DropInput, FileKind } from './inputs';
 import { invalidLink, toLink } from './links';
 import { iconButton, row, rowLabel, smallButton, tile, zone } from './styles';
@@ -72,9 +74,14 @@ export const kindIcons: Record<FileKind, AppIcon> = {
 
 /**
  * "Add Files": a drop zone with a Browse button until something is added,
- * then the list of what was added, with a row to add more. Files can be
- * dropped on either. An "Add from URL" row follows where the input allows
- * links.
+ * then what was added, with a row to add more. Files can be dropped on
+ * either. An "Add from URL" row follows where the input allows links.
+ *
+ * Videos show as every stage's files do (see MediaStrip): the drop zone
+ * stays, so adding more is always in reach, and under it a strip of their
+ * frames with their lengths (and sizes, see withSizes), each with a ✕ to take it out. Other
+ * files, and videos whose order matters, show as a list to remove from or
+ * put in order.
  */
 export function DropZone({
   input,
@@ -83,9 +90,13 @@ export function DropZone({
   link,
   onLinkChange,
   onNotice,
+  locked = false,
 }: {
   input: DropInput;
   items: Item[];
+  /** Shown but not changed, as once a run has started on them: nothing
+   *  added, removed or moved. */
+  locked?: boolean;
   onItemsChange: (items: Item[]) => void;
   /** The "Add from URL" field's text. */
   link: string;
@@ -137,17 +148,51 @@ export function DropZone({
   };
 
   const browse = () => picker.current?.click();
+  const strip = input.files === 'video' && !input.ordered;
+  const addMore = !locked && (
+    <li className={row}>
+      <span className={tile}>
+        <Plus size={15} />
+      </span>
+      <span className={rowLabel}>Add more, or drop them here</span>
+      <button type="button" onClick={browse} className={smallButton}>
+        Browse
+      </button>
+    </li>
+  );
 
   return (
+    // Once there are files, a card like the results': white, lifted, with a
+    // hairline between its rows (Add from URL among them). Videos keep the
+    // drop zone, their strip in a card of its own below it (see MediaStrip).
     <div
-      onDragOver={(event) => {
-        event.preventDefault();
-        if (!event.dataTransfer.types.includes(rowDrag)) setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={drop}
+      className={
+        items.length > 0 && !strip
+          ? 'divide-y divide-hairline rounded-2xl bg-canvas px-4 shadow-card'
+          : ''
+      }
+      {...(!locked && {
+        onDragOver: (event: DragEvent) => {
+          event.preventDefault();
+          if (!event.dataTransfer.types.includes(rowDrag)) setOver(true);
+        },
+        onDragLeave: () => setOver(false),
+        onDrop: drop,
+      })}
     >
-      {items.length === 0 ? (
+      {/* First, so the hairlines fall only between the rows shown. */}
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        accept={input.accept}
+        onChange={(event) => {
+          add([...(event.target.files ?? [])]);
+          event.target.value = '';
+        }}
+      />
+      {items.length === 0 || (strip && !locked) ? (
         <div
           className={`${zone} relative justify-center border border-transparent`}
         >
@@ -184,15 +229,15 @@ export function DropZone({
             <FolderOpen size={13} />
           </button>
         </div>
-      ) : (
+      ) : strip ? null : (
         <ul
-          className={`max-h-60 overflow-y-auto rounded-xl ${over ? 'bg-ink/5' : ''}`}
+          className={`max-h-60 divide-y divide-hairline overflow-y-auto ${over ? 'bg-ink/5' : ''}`}
         >
           {items.map((item, index) => {
             const isLink = typeof item === 'string';
             const Icon = isLink ? Link2 : kindIcons[input.files];
             const name = isLink ? item.replace(/^https?:\/\//, '') : item.name;
-            const reorder = input.ordered && items.length > 1;
+            const reorder = !locked && input.ordered && items.length > 1;
             return (
               <li
                 key={keys[index]}
@@ -243,49 +288,32 @@ export function DropZone({
                 <span className="text-xs text-ink-faint">
                   {isLink ? 'Link' : formatBytes(item.size)}
                 </span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${name}`}
-                  onClick={() =>
-                    onItemsChange(items.filter((_, i) => i !== index))
-                  }
-                  className={iconButton}
-                >
-                  <X size={14} />
-                </button>
+                {!locked && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${name}`}
+                    onClick={() =>
+                      onItemsChange(items.filter((_, i) => i !== index))
+                    }
+                    className={iconButton}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </li>
             );
           })}
-          <li className={row}>
-            <span className={tile}>
-              <Plus size={15} />
-            </span>
-            <span className={rowLabel}>Add more, or drop them here</span>
-            <button type="button" onClick={browse} className={smallButton}>
-              Browse
-            </button>
-          </li>
+          {addMore}
         </ul>
       )}
-      <input
-        ref={picker}
-        type="file"
-        multiple
-        hidden
-        accept={input.accept}
-        onChange={(event) => {
-          add([...(event.target.files ?? [])]);
-          event.target.value = '';
-        }}
-      />
 
-      {input.links && (
+      {input.links && !locked && (
         <form
           onSubmit={(event) => {
             event.preventDefault();
             addLink(link);
           }}
-          className={`${row} ${items.length === 0 ? 'mt-2' : ''}`}
+          className={`${row} ${items.length === 0 || strip ? 'mt-2' : ''}`}
         >
           <span className={tile}>
             <Globe size={15} />
@@ -300,6 +328,35 @@ export function DropZone({
             className="h-7.5 w-60 rounded-lg px-2.5"
           />
         </form>
+      )}
+
+      {strip && items.length > 0 && (
+        <div
+          className={`rounded-2xl bg-canvas px-4 py-3 shadow-card ${locked ? '' : 'mt-4'}`}
+        >
+          <MediaStrip
+            items={items.map(
+              (item, index): MediaItem =>
+                typeof item === 'string'
+                  ? {
+                      key: keys[index],
+                      name: item.replace(/^https?:\/\//, ''),
+                      kind: 'link',
+                    }
+                  : {
+                      key: keys[index],
+                      name: item.name,
+                      kind: input.files,
+                      size: input.sizes ? item.size : undefined,
+                      preview: () => itemPreview(item),
+                    },
+            )}
+            locked={locked}
+            onRemove={(index) =>
+              onItemsChange(items.filter((_, i) => i !== index))
+            }
+          />
+        </div>
       )}
     </div>
   );

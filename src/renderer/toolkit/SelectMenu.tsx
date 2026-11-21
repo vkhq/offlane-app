@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import { Check } from '../components/icons';
+import { canvasMoveEvent } from './Canvas';
 
 /**
  * A pop-up button with a macOS-style menu: frosted, translucent glass with a
@@ -21,6 +22,10 @@ export function SelectMenu({
   value,
   choices,
   disabled = false,
+  readOnly = false,
+  align = 'start',
+  hint,
+  field,
   onChange,
   className,
   children,
@@ -30,6 +35,17 @@ export function SelectMenu({
   /** Each choice as [value, label]. */
   choices: [string, string][];
   disabled?: boolean;
+  /** Opens to show the choice made, the rest greyed out, but changes
+   *  nothing: a step that has run. */
+  readOnly?: boolean;
+  /** The trigger's tooltip, when it should say more than `label`. */
+  hint?: string;
+  /** In place of a list, a field to type in (a number, a name). Return and
+   *  Escape close the menu. */
+  field?: ReactNode;
+  /** Which of the trigger's edges the menu lines up with: its left, or
+   *  its right, for a trigger at the end of a row. */
+  align?: 'start' | 'end';
   onChange: (value: string) => void;
   className: string;
   children: ReactNode;
@@ -61,7 +77,7 @@ export function SelectMenu({
 
   const pick = (index: number) => {
     const choice = choices[index];
-    if (choice && choice[0] !== value) onChange(choice[0]);
+    if (!readOnly && choice && choice[0] !== value) onChange(choice[0]);
     close();
   };
 
@@ -79,14 +95,18 @@ export function SelectMenu({
         ? button.top - gap - height
         : below;
     const left = Math.min(
-      Math.max(margin, button.left),
+      Math.max(margin, align === 'end' ? button.right - width : button.left),
       window.innerWidth - width - margin,
     );
     setPlace({ left, top });
-    menu.current.focus();
-  }, [open]);
+    // A field takes the keys; a list is moved through with the arrows.
+    const input = menu.current.querySelector('input');
+    if (input && !readOnly) input.focus();
+    else menu.current.focus();
+  }, [open, align, readOnly]);
 
-  // Any press outside, scroll, resize or the window losing focus closes it.
+  // Any press outside, scroll, the canvas moving, resize or the window
+  // losing focus closes it.
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -105,17 +125,27 @@ export function SelectMenu({
     };
     document.addEventListener('pointerdown', outside, true);
     window.addEventListener('scroll', dismiss, true);
+    window.addEventListener(canvasMoveEvent, dismiss);
     window.addEventListener('resize', dismiss);
     window.addEventListener('blur', dismiss);
     return () => {
       document.removeEventListener('pointerdown', outside, true);
       window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener(canvasMoveEvent, dismiss);
       window.removeEventListener('resize', dismiss);
       window.removeEventListener('blur', dismiss);
     };
   }, [open]);
 
   const onMenuKey = (event: React.KeyboardEvent) => {
+    // Typing in a field: only Return and Escape are the menu's.
+    if (event.target instanceof HTMLInputElement) {
+      if (event.key === 'Enter' || event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+      return;
+    }
     const last = choices.length - 1;
     switch (event.key) {
       case 'ArrowDown':
@@ -149,9 +179,9 @@ export function SelectMenu({
       <button
         ref={trigger}
         type="button"
-        title={label}
-        aria-label={label}
-        aria-haspopup="listbox"
+        title={hint ?? label}
+        aria-label={hint ?? label}
+        aria-haspopup={field ? 'dialog' : 'listbox'}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         disabled={disabled}
@@ -171,7 +201,7 @@ export function SelectMenu({
           <div
             ref={menu}
             id={id}
-            role="listbox"
+            role={field ? 'dialog' : 'listbox'}
             aria-label={label}
             tabIndex={-1}
             aria-activedescendant={active >= 0 ? `${id}-${active}` : undefined}
@@ -183,9 +213,10 @@ export function SelectMenu({
             }
             className="fixed z-50 flex max-h-80 min-w-40 flex-col overflow-y-auto rounded-[14px] bg-menu/70 p-[5px] text-[13px] text-ink shadow-menu outline-none backdrop-blur-xl backdrop-saturate-[1.8]"
           >
+            {field}
             {choices.map(([option, text], index) => {
               const chosen = option === value;
-              const lit = index === active;
+              const lit = index === active && !readOnly;
               return (
                 <div
                   key={option}
@@ -196,7 +227,7 @@ export function SelectMenu({
                   onClick={() => pick(index)}
                   className={`flex h-[26px] shrink-0 cursor-default items-center gap-1.5 rounded-[8px] pr-4 pl-1.5 whitespace-nowrap ${
                     lit ? 'bg-accent text-accent-ink' : ''
-                  }`}
+                  } ${readOnly && !chosen ? 'text-ink-faint' : ''}`}
                 >
                   <span className="flex w-3.5 shrink-0 justify-center">
                     {chosen && <Check size={12} strokeWidth={2.75} />}

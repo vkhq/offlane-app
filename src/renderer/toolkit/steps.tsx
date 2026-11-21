@@ -15,13 +15,17 @@ import { useTabState } from '../tabState';
 export type StepInput = OutputRef & { name: string; kind: FileKind };
 
 /**
- * One more tool run on an earlier output, shown below the page it started
- * from: a chain of steps, all in one tab.
+ * One more tool run on an earlier stage's outputs, shown below that stage:
+ * the page's stages branch out from its first, all in one tab.
  */
 export type Step = {
   id: string;
+  /** The step whose outputs it works on; null for the page's own. */
+  parent: string | null;
   toolId: string;
   inputs: StepInput[];
+  /** Inputs left out of its run, by place: every one is ticked at first. */
+  skipped?: number[];
   values: Record<string, SettingValue>;
   /** The file picked for each of its file options. */
   attachments?: Record<string, File | SavedFile>;
@@ -33,9 +37,10 @@ type Steps = {
   steps: Step[];
   /** The step added last, to scroll to when it appears. */
   added: string | null;
-  add: (toolId: string, inputs: StepInput[]) => void;
+  /** Adds a step under `parent` (null: under the page's own results). */
+  add: (toolId: string, inputs: StepInput[], parent: string | null) => void;
   update: (id: string, patch: Partial<Step>) => void;
-  /** Removes a step, and the steps that work on its outputs. */
+  /** Removes a step, and every step branching from it. */
   remove: (id: string) => void;
   /** Removes every step, as Start Over does. */
   clear: () => void;
@@ -48,18 +53,19 @@ const StepsContext = createContext<Steps | null>(null);
  * tabs, and shares them with every result that can start one.
  */
 export function StepsProvider({ children }: { children: ReactNode }) {
-  const [steps, setSteps] = useTabState<Step[]>('steps', []);
+  const [saved, setSteps] = useTabState<Step[]>('steps', []);
   const [added, setAdded] = useState<string | null>(null);
+  const steps = useMemo(() => withParents(saved), [saved]);
 
   const value = useMemo<Steps>(
     () => ({
       steps,
       added,
-      add: (toolId, inputs) => {
+      add: (toolId, inputs, parent) => {
         const id = crypto.randomUUID();
         setSteps((current) => [
-          ...current,
-          { id, toolId, inputs, values: {}, jobIds: [] },
+          ...withParents(current),
+          { id, parent, toolId, inputs, values: {}, jobIds: [] },
         ]);
         setAdded(id);
       },
@@ -71,22 +77,24 @@ export function StepsProvider({ children }: { children: ReactNode }) {
         ),
       remove: (id) =>
         setSteps((current) => {
-          // Whatever was made from a removed step's runs goes with it.
+          const all = withParents(current);
+          // Every branch from a removed step goes with it.
           const removed = new Set([id]);
-          const jobs = new Set<string>();
           let grew = true;
           while (grew) {
             grew = false;
-            for (const step of current) {
-              if (removed.has(step.id)) {
-                step.jobIds.forEach((job) => jobs.add(job));
-              } else if (step.inputs.some((input) => jobs.has(input.jobId))) {
+            for (const step of all) {
+              if (
+                !removed.has(step.id) &&
+                step.parent &&
+                removed.has(step.parent)
+              ) {
                 removed.add(step.id);
                 grew = true;
               }
             }
           }
-          return current.filter((step) => !removed.has(step.id));
+          return all.filter((step) => !removed.has(step.id));
         }),
       clear: () => setSteps([]),
     }),
@@ -98,3 +106,23 @@ export function StepsProvider({ children }: { children: ReactNode }) {
 
 /** The page's steps; null outside a tool page. */
 export const useSteps = () => useContext(StepsContext);
+
+/**
+ * Steps saved before they branched have no parent: it is the step that
+ * made their first input, or the page itself.
+ */
+function withParents(steps: Step[]): Step[] {
+  if (steps.every((step) => step.parent !== undefined)) return steps;
+  return steps.map((step) => {
+    if (step.parent !== undefined) return step;
+    const job = step.inputs[0]?.jobId;
+    const maker = steps.find((other) => job && other.jobIds.includes(job));
+    return { ...step, parent: maker?.id ?? null };
+  });
+}
+
+/**
+ * The stage a part of the page belongs to: a step's id, or null for the
+ * page's own. What's Next under a stage's results adds a branch to it.
+ */
+export const StageContext = createContext<string | null>(null);

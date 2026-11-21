@@ -165,9 +165,12 @@ export function useRecording() {
 export function Recorder({
   input,
   recording,
+  locked = false,
 }: {
   input: RecordInput;
   recording: Recording;
+  /** Once its recording has been run: no recording again. */
+  locked?: boolean;
 }) {
   const { state, seconds, meter } = recording;
   const recordingNow = state === 'recording';
@@ -200,17 +203,19 @@ export function Recorder({
       ) : (
         <p className="pt-0.5 text-ink-soft">{input.note}</p>
       )}
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() =>
-          recordingNow ? recording.stop() : void recording.start()
-        }
-        className={`${smallButton} mt-2 disabled:opacity-40`}
-      >
-        {recordingNow ? 'Stop' : state === 'done' ? 'Record Again' : 'Record'}
-        {recordingNow ? <Square size={13} /> : <Mic size={15} />}
-      </button>
+      {!locked && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            recordingNow ? recording.stop() : void recording.start()
+          }
+          className={`${smallButton} mt-2 disabled:opacity-40`}
+        >
+          {recordingNow ? 'Stop' : state === 'done' ? 'Record Again' : 'Record'}
+          {recordingNow ? <Square size={13} /> : <Mic size={15} />}
+        </button>
+      )}
     </div>
   );
 }

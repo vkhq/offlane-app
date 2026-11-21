@@ -6,6 +6,10 @@
 //     mostly) is rewrapped without re-encoding, which takes seconds;
 //   - one with a stream it can't decode has only that stream re-encoded,
 //     to H.264 or AAC.
+// Chromium plays only a file's first audio track, so a file with several
+// gets a rewrapped copy per track asked for, the page swapping between
+// them; and it shows no subtitles from inside a file, so text subtitle
+// tracks are handed to the page as WebVTT, for a <track> element.
 // Rewrapped and re-encoded copies go in a cache folder that is emptied at
 // every launch. Files are served over media://job/<id>, and only files this
 // module prepared for a job are ever served: the page never names a path.
@@ -18,7 +22,17 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 
-import type { PlaybackProgress, PlaybackSource } from '../shared/types';
+import {
+  canonicalLanguage,
+  languageName,
+  sameLanguage,
+} from '../shared/languages';
+import type {
+  PlaybackProgress,
+  PlaybackSource,
+  PlaybackSubtitles,
+  PlaybackTrack,
+} from '../shared/types';
 import { run } from './engine/runner';
 import { pickH264Encoder } from './ffmpeg/encoders';
 
@@ -38,7 +52,27 @@ type Stream = {
   height?: number;
   disposition?: { attached_pic?: number };
   side_data_list?: { rotation?: number }[];
+  tags?: { language?: string; title?: string };
 };
+
+/** What the download asked for, to name tracks a file doesn't label: the
+ *  audio languages in the order they were saved, and the original one. */
+export type TrackHints = {
+  languages?: (string | undefined)[];
+  original?: string;
+};
+
+/** Subtitle formats that are text, and so become WebVTT; pictures (as on
+ *  a Blu-ray) can't. */
+const textSubtitles = new Set([
+  'mov_text',
+  'subrip',
+  'srt',
+  'webvtt',
+  'ass',
+  'ssa',
+  'text',
+]);
 type Probed = {
   streams?: Stream[];
   format?: { format_name?: string; duration?: string };
@@ -71,7 +105,8 @@ const types: Record<string, string> = {
 };
 
 export class Player {
-  /** Each prepared job's file, the only files media:// serves. */
+  /** Each prepared job's file, the only files media:// serves: the copy
+   *  with the audio track last asked for. */
   private served = new Map<string, string>();
   private pending = new Map<
     string,
@@ -86,34 +121,54 @@ export class Player {
   }
 
   /**
-   * Makes job `id`'s finished file, at `file`, playable and returns the URL
-   * to play it from. Asked twice while preparing, it answers both at once.
+   * Makes job `id`'s finished file, at `file`, playable with its audio
+   * track `track`, and returns the URL to play it from. Asked twice while
+   * preparing, it answers both at once.
    */
-  prepare(id: string, file: string): Promise<PlaybackSource> {
-    const running = this.pending.get(id);
+  prepare(
+    id: string,
+    file: string,
+    track = 0,
+    hints: TrackHints = {},
+  ): Promise<PlaybackSource> {
+    const key = `${id}:${track}`;
+    const running = this.pending.get(key);
     if (running) return running.promise;
     const abort = new AbortController();
-    const promise = this.make(id, file, abort.signal).finally(() => {
-      if (this.pending.get(id)?.abort === abort) this.pending.delete(id);
-    });
-    this.pending.set(id, { promise, abort });
+    const promise = this.make(id, file, track, hints, abort.signal).finally(
+      () => {
+        if (this.pending.get(key)?.abort === abort) this.pending.delete(key);
+      },
+    );
+    this.pending.set(key, { promise, abort });
     return promise;
   }
 
   /** Stops preparing job `id`, when its player is closed before it plays. */
   cancel(id: string) {
-    this.pending.get(id)?.abort.abort();
-    this.pending.delete(id);
+    for (const [key, { abort }] of this.pending) {
+      if (!key.startsWith(`${id}:`)) continue;
+      abort.abort();
+      this.pending.delete(key);
+    }
   }
 
   private async make(
     id: string,
     file: string,
+    track: number,
+    hints: TrackHints,
     signal: AbortSignal,
   ): Promise<PlaybackSource> {
     const tools = this.deps.getFfmpeg();
     // Without ffprobe there is no telling; let Chromium try the file as is.
-    if (!tools) return this.serve(id, file, 'direct', null);
+    if (!tools) {
+      return this.serve(id, file, 'direct', null, {
+        audioTracks: [],
+        audioTrack: 0,
+        subtitles: [],
+      });
+    }
 
     const info = await probe(tools.ffprobe, file);
     const streams = (info.streams ?? []).filter(
@@ -124,17 +179,34 @@ export class Player {
     if (video.length === 0 && audio.length === 0) {
       throw new Error('This file has no video or audio to play.');
     }
+    const stat = await fs.stat(file);
+    const chosen = Math.min(
+      Math.max(0, Math.floor(track) || 0),
+      Math.max(0, audio.length - 1),
+    );
+    const tracks = {
+      audioTracks: audio.length > 1 ? audioTracksOf(audio, hints) : [],
+      audioTrack: chosen,
+      subtitles: await this.subtitlesOf(
+        tools.ffmpeg,
+        file,
+        streams,
+        `${id}-${Math.round(stat.mtimeMs)}`,
+        signal,
+      ),
+    };
     const aspect = aspectOf(video[0]);
     const videoCodec = video[0]?.codec_name ?? null;
-    const audioCodec = audio[0]?.codec_name ?? null;
+    const audioCodec = audio[chosen]?.codec_name ?? null;
     const videoOk = !videoCodec || playableVideo.has(videoCodec);
     const audioOk = !audioCodec || playableAudio.has(audioCodec);
 
-    if (videoOk && audioOk && containerOk(info, file)) {
-      return this.serve(id, file, 'direct', aspect);
+    // With several audio tracks, Chromium would play only the first: each
+    // gets a copy of its own.
+    if (videoOk && audioOk && audio.length <= 1 && containerOk(info, file)) {
+      return this.serve(id, file, 'direct', aspect, tracks);
     }
 
-    const stat = await fs.stat(file);
     const remux = videoOk && audioOk;
     const webm =
       remux &&
@@ -143,12 +215,21 @@ export class Player {
     const ext = webm ? '.webm' : video.length ? '.mp4' : '.m4a';
     const output = path.join(
       this.deps.cacheDir,
-      `${id}-${Math.round(stat.mtimeMs)}${ext}`,
+      `${id}-${Math.round(stat.mtimeMs)}${audio.length > 1 ? `-a${chosen}` : ''}${ext}`,
     );
     const prepared = remux ? 'remux' : 'transcode';
-    if (existsSync(output)) return this.serve(id, output, prepared, aspect);
+    if (existsSync(output)) {
+      return this.serve(id, output, prepared, aspect, tracks);
+    }
 
-    const args = ['-i', `file:${file}`, '-map', '0:v:0?', '-map', '0:a:0?'];
+    const args = [
+      '-i',
+      `file:${file}`,
+      '-map',
+      '0:v:0?',
+      '-map',
+      `0:a:${chosen}?`,
+    ];
     if (videoOk) {
       args.push('-c:v', 'copy');
     } else {
@@ -205,7 +286,7 @@ export class Player {
       );
     }
     await fs.rename(partial, output);
-    return this.serve(id, output, prepared, aspect);
+    return this.serve(id, output, prepared, aspect, tracks);
   }
 
   private serve(
@@ -213,12 +294,77 @@ export class Player {
     file: string,
     prepared: PlaybackSource['prepared'],
     aspect: number | null,
+    tracks: Pick<PlaybackSource, 'audioTracks' | 'audioTrack' | 'subtitles'>,
   ): PlaybackSource {
     this.served.set(id, file);
     // The file's name in the URL changes when the copy does, so the page
     // never plays a stale one from its cache.
     const version = encodeURIComponent(path.basename(file));
-    return { url: `media://job/${id}?v=${version}`, prepared, aspect };
+    return {
+      url: `media://job/${id}?v=${version}`,
+      prepared,
+      aspect,
+      ...tracks,
+    };
+  }
+
+  /**
+   * The file's text subtitle tracks as WebVTT, made once per file and kept
+   * in the cache (named from `stem`). A track that won't convert is left
+   * out rather than stopping playback.
+   */
+  private async subtitlesOf(
+    ffmpeg: string,
+    file: string,
+    streams: Stream[],
+    stem: string,
+    signal: AbortSignal,
+  ): Promise<PlaybackSubtitles[]> {
+    const subtitles = streams.filter(
+      (stream) => stream.codec_type === 'subtitle',
+    );
+    const found: PlaybackSubtitles[] = [];
+    for (const [index, stream] of subtitles.entries()) {
+      if (!textSubtitles.has(stream.codec_name ?? '')) continue;
+      const output = path.join(this.deps.cacheDir, `${stem}-s${index}.vtt`);
+      if (!existsSync(output)) {
+        await fs.mkdir(this.deps.cacheDir, { recursive: true });
+        const partial = `${output}.${process.pid}-${Date.now()}.part.vtt`;
+        const result = await run(
+          ffmpeg,
+          [
+            '-hide_banner',
+            '-nostdin',
+            '-y',
+            '-loglevel',
+            'error',
+            '-i',
+            `file:${file}`,
+            '-map',
+            `0:s:${index}`,
+            '-c:s',
+            'webvtt',
+            partial,
+          ],
+          { signal, timeoutMs: 60_000 },
+        );
+        if (result.killed) throw new Error('Canceled');
+        if (result.code !== 0) {
+          await fs.rm(partial, { force: true });
+          continue;
+        }
+        await fs.rename(partial, output);
+      }
+      const language = canonicalLanguage(stream.tags?.language) ?? '';
+      found.push({
+        label:
+          stream.tags?.title ||
+          (language ? languageName(language) : `Subtitles ${index + 1}`),
+        language,
+        vtt: await fs.readFile(output, 'utf8'),
+      });
+    }
+    return found;
   }
 
   /**
@@ -279,7 +425,7 @@ async function probe(ffprobe: string, file: string): Promise<Probed> {
         '-v',
         'error',
         '-show_entries',
-        'format=format_name,duration:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic:stream_side_data=rotation',
+        'format=format_name,duration:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=language,title',
         '-of',
         'json',
         `file:${file}`,
@@ -319,4 +465,27 @@ function aspectOf(stream: Stream | undefined): number | null {
   return rotation === 90
     ? stream.height / stream.width
     : stream.width / stream.height;
+}
+
+/**
+ * A file's audio tracks as the player lists them: by language, from the
+ * file's own tags or else from what the download asked for, in order. The
+ * original is marked; "Track 2" when nothing says.
+ */
+function audioTracksOf(audio: Stream[], hints: TrackHints): PlaybackTrack[] {
+  const tracks = audio.map((stream, index) => {
+    const language =
+      canonicalLanguage(stream.tags?.language) ??
+      canonicalLanguage(hints.languages?.[index]);
+    return {
+      label: language ? languageName(language) : `Track ${index + 1}`,
+      original: !!hints.original && sameLanguage(language, hints.original),
+    };
+  });
+  // Two tracks with one name (two English mixes) are told apart by number.
+  return tracks.map((track, index) =>
+    tracks.filter((other) => other.label === track.label).length > 1
+      ? { ...track, label: `${track.label} ${index + 1}` }
+      : track,
+  );
 }

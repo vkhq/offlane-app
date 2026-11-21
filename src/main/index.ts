@@ -151,6 +151,8 @@ const tools = new ToolQueue({
   requirements: loadRequirements(),
   assertToolkits: (ids) => toolkits.assertInstalled(ids),
   getOutputDir: () => settings.get().downloadDir,
+  // Finished runs, still listed after a restart, as downloads are.
+  file: path.join(userData, 'tools', 'jobs.json'),
 });
 
 // Tool sessions, listed in History and opened again from there.
@@ -438,6 +440,7 @@ const inventory = new StorageInventory({
       sendSessionsChanged();
     },
     'download-list': () => manager.clearFinished(),
+    'tool-results': () => tools.clearFinished(),
     'unfinished-downloads': () => manager.discardUnfinished(),
     settings: () => {
       settings.reset();

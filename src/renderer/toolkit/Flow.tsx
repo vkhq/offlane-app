@@ -19,13 +19,15 @@ import { smallButton } from './styles';
 
 /**
  * One step of the workflow: bare, on the canvas, with no card. A small
- * label row (icon, title, a line beside it, then `aside` on the right, such
- * as Start Over) over its content; with neither title nor aside, no row.
+ * label row (icon, title, a line beside it, `beside` right after that,
+ * such as a step's ✕, then `aside` on the right, such as Start Over) over
+ * its content; with neither title nor aside, no row.
  */
 export function FlowNode({
   icon: Icon,
   title,
   detail,
+  beside,
   aside,
   ref,
   children,
@@ -33,22 +35,31 @@ export function FlowNode({
   icon?: AppIcon;
   title?: string;
   detail?: ReactNode;
+  /** Right after the line, as a step's remove button. */
+  beside?: ReactNode;
   /** On the label row's right: a remove or Start Over button. */
   aside?: ReactNode;
   ref?: Ref<HTMLElement>;
   children?: ReactNode;
 }) {
   return (
-    <section ref={ref} className="flex w-full scroll-mt-6 flex-col gap-1.5">
-      {(title || aside) && (
+    <section
+      ref={ref}
+      // A card on the canvas: dragging on it doesn't pan (see Canvas).
+      data-canvas-node
+      className="flex w-full flex-col gap-1.5"
+    >
+      {(title || aside || beside) && (
         <header className="flex h-7 items-center gap-2 pl-1">
           {Icon && <Icon size={14} className="shrink-0 text-ink-faint" />}
           <h2 className="shrink-0 text-[12px] font-semibold text-ink-soft">
             {title}
           </h2>
-          <p className="min-w-0 flex-1 truncate text-[12px] text-ink-faint">
+          <p className="min-w-0 truncate text-[12px] text-ink-faint">
             {detail}
           </p>
+          {beside}
+          <span className="flex-1" />
           {aside}
         </header>
       )}
@@ -57,13 +68,21 @@ export function FlowNode({
   );
 }
 
-/** `success` marks an outcome worth showing off: found, downloaded. */
-export type FlowTone = 'plain' | 'busy' | 'done' | 'success' | 'failed';
+/** `success` marks an outcome worth showing off: found, downloaded.
+ *  `info` names the step it leads to: Download Options. */
+export type FlowTone =
+  | 'plain'
+  | 'info'
+  | 'busy'
+  | 'done'
+  | 'success'
+  | 'failed';
 
 // Each tone's fill and text: soft and opaque, so the canvas's dots stay
 // behind the pill.
 const tones: Record<FlowTone, string> = {
   plain: 'bg-well text-neutral-700',
+  info: 'bg-blue-100 text-blue-900',
   busy: 'bg-flow-soft text-flow',
   done: 'bg-green-100 text-green-900',
   success: 'bg-green-100 text-green-900',
@@ -73,6 +92,7 @@ const tones: Record<FlowTone, string> = {
 // What is under way, went well or went wrong carries an icon.
 const toneIcons: Record<FlowTone, AppIcon | null> = {
   plain: null,
+  info: null,
   busy: LoaderCircle,
   done: null,
   success: Check,
@@ -133,7 +153,7 @@ export function FlowLink({
  * A stretch of link ending in an open arrowhead, its tip at the bottom. It
  * grows down to its length when it appears, the arrowhead riding its end.
  */
-function Arrow({ length }: { length: string }) {
+export function Arrow({ length }: { length: string }) {
   return (
     <span className="flex flex-col items-center text-link">
       <span className={`flow-line animate-grow-down ${length}`} />
