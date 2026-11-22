@@ -25,6 +25,8 @@ export type NumberSetting = {
   label: string;
   value: number;
   unit?: string;
+  /** Seconds, shown and typed as a time ("1:05.25"), not a number. */
+  time?: boolean;
 };
 export type SliderSetting = { kind: 'slider'; label: string; value: number };
 export type TextSetting = {
@@ -195,11 +197,45 @@ export const quality = (value = 80): SliderSetting => ({
   value,
 });
 
+/** A moment, in seconds, shown and typed as a time. */
+export const time = (label: string, value: number): NumberSetting => ({
+  kind: 'number',
+  label,
+  value,
+  time: true,
+});
+
 /** `start` and `end`, in seconds; spread into a tool's options. */
 export const timeRange = () => ({
-  start: number('Start', 0, 's'),
-  end: number('End', 10, 's'),
+  start: time('Start', 0),
+  end: time('End', 10),
 });
+
+/** Seconds to the hundredth, as times are shown: "1:05.25", "1:02:05.25". */
+export function clock(seconds: number) {
+  const hundredths = Math.round(Math.max(0, seconds) * 100);
+  const total = Math.floor(hundredths / 100);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  const cs = String(hundredths % 100).padStart(2, '0');
+  return h
+    ? `${h}:${String(m).padStart(2, '0')}:${s}.${cs}`
+    : `${m}:${s}.${cs}`;
+}
+
+/**
+ * A time as typed, in seconds: "1:05.25", "1:02:05", "65.5" or "65.5s";
+ * null if it isn't one. Minutes and seconds after a colon are under 60.
+ */
+export function parseClock(text: string): number | null {
+  const typed = text.trim().replace(/s$/i, '').trim();
+  if (!/^\d+(:\d+){0,2}(\.\d+)?$|^\.\d+$/.test(typed)) return null;
+  const parts = typed.split(':').map(Number);
+  if (parts.slice(1).some((part) => part >= 60)) return null;
+  const seconds = parts.reduce((sum, part) => sum * 60 + part, 0);
+  return Number.isFinite(seconds) ? Math.round(seconds * 100) / 100 : null;
+}
 
 export const pageRange = (label = 'Pages') => text(label, '', '1-3, 5');
 

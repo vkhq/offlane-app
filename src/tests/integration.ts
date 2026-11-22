@@ -62,9 +62,11 @@ import { SessionStore } from '../main/storage/sessions';
 import { defaultSettings, mergeSettings } from '../main/storage/settings';
 import { type ToolHandler, ToolQueue } from '../main/tools/queue';
 import {
+  clock,
   defineOptions,
   file,
   isShown,
+  parseClock,
   parseValues,
   quality,
   select,
@@ -74,6 +76,8 @@ import {
 import { options as convertAudioOptions } from '../tools/audio/convert-audio/options';
 import compressVideo from '../tools/video/compress-video/handler';
 import muteVideo from '../tools/video/mute-video/handler';
+import trimVideo from '../tools/video/trim-video/handler';
+import { frameAt, waveform } from '../main/media';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
 import { resolveOutputs } from '../main/tools/outputs';
@@ -104,6 +108,9 @@ let base: string;
  *  half way. */
 const slowRate = 64 * 1024;
 const served: { path: string; range?: string }[] = [];
+/** The next request for a file under /refuse/ is refused (HTTP 403), as
+ *  YouTube refuses links whose challenge wasn't solved. */
+let refuseNext = false;
 
 before(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'theoneapp-test-'));
@@ -151,11 +158,17 @@ before(async () => {
       response.writeHead(404).end();
       return;
     }
+    if (url.pathname.startsWith('/refuse/') && refuseNext) {
+      refuseNext = false;
+      response.writeHead(403).end();
+      return;
+    }
     const slow = url.pathname.startsWith('/slow/');
+    const refusing = url.pathname.startsWith('/refuse/');
     const file = path.join(
       tmp,
-      slow ? 'media' : '',
-      url.pathname.replace(/^\/(slow\/)?/, ''),
+      slow || refusing ? 'media' : '',
+      url.pathname.replace(/^\/(slow\/|refuse\/)?/, ''),
     );
     if (!file.startsWith(tmp) || !existsSync(file)) {
       response.writeHead(404).end();
@@ -698,7 +711,10 @@ describe('chaining tools', () => {
         const page = readFileSync(path.join(dir, 'page.tsx'), 'utf8');
         const manifest = readFileSync(path.join(dir, 'manifest.ts'), 'utf8');
         // Allowing for a wrapper such as ordered(dropVideos()).
-        const input = /input:\s*(?:ordered\()?(drop\w*)\(([^)]*)\)/.exec(page);
+        const input =
+          /input:\s*(?:(?:ordered|withSizes)\()?(drop\w*)\(([^)]*)\)/.exec(
+            page,
+          );
         const declared = /accepts:\s*\[([^\]]*)\]/.exec(manifest);
         const accepts = declared
           ? [...declared[1].matchAll(/'(\w+)'/g)].map((match) => match[1])
@@ -962,6 +978,24 @@ describe(
       } finally {
         setDemo(false);
       }
+    });
+
+    test('links a site refuses are looked up again, once', async () => {
+      const { manager } = await newManager('refused');
+      const url = `${base}/refuse/clip.mp4`;
+      const info = await manager.probe(url);
+      // The preview's saved links are refused when downloaded from...
+      refuseNext = true;
+      served.length = 0;
+      const [job] = manager.enqueue([
+        { url, quality: 'best', probeToken: info.probeToken },
+      ]);
+      // ...so it is looked up again and downloads.
+      const done = await waitFor(manager, job.id, ['completed', 'failed']);
+      assert.equal(done.status, 'completed', done.error?.raw ?? '');
+      assert.equal(done.attempts, 2);
+      assert.equal(refuseNext, false, 'the refused request was made');
+      await manager.shutdown();
     });
 
     test('extracts audio with ffmpeg', async () => {
@@ -2051,6 +2085,141 @@ describe('tool queue', () => {
   );
 
   test(
+    'Trim Video keeps the part asked for, cut on the frame',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'trim');
+      await fs.mkdir(dir, { recursive: true });
+      const clip = path.join(dir, 'talk.mov');
+      // Four seconds of video and sound.
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=320x240:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=4',
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-shortest',
+        clip,
+      ]);
+      /** Each stream's `codec_name,codec_type`, and the length. */
+      const streamsOf = (file: string) => {
+        const lines = spawnSync(vendorFfprobe, [
+          '-v',
+          'error',
+          '-show_entries',
+          'stream=codec_type,codec_name:format=duration',
+          '-of',
+          'csv=p=0',
+          file,
+        ])
+          .stdout.toString()
+          .trim()
+          .split('\n');
+        return {
+          streams: lines.slice(0, -1).map((line) => line.trim()),
+          duration: Number(lines.at(-1)),
+        };
+      };
+      const tools = queue({ 'trim-video': trimVideo });
+      const trim = async (values: { start: number; end: number }) => {
+        const [job] = tools.run('trim-video', {
+          files: [clip],
+          links: [],
+          values,
+        });
+        return settled(tools, job.id);
+      };
+
+      // 1 s to 2.5 s: an MP4 of H.264 and AAC, 1.5 s long.
+      const middle = await trim({ start: 1, end: 2.5 });
+      assert.equal(middle.status, 'done', middle.error ?? '');
+      assert.deepEqual(middle.outputs, ['talk-trimmed.mp4']);
+      assert.equal(middle.note, undefined);
+      const cut = streamsOf(path.join(outDir(), 'talk-trimmed.mp4'));
+      assert.deepEqual(cut.streams, ['h264,video', 'aac,audio']);
+      assert.ok(Math.abs(cut.duration - 1.5) < 0.1, String(cut.duration));
+
+      // An End past the video's end keeps the rest, and says so.
+      const rest = await trim({ start: 3, end: 30 });
+      assert.equal(rest.status, 'done', rest.error ?? '');
+      assert.match(rest.note ?? '', /past the end of the video/);
+      const tail = streamsOf(path.join(outDir(), rest.outputs[0]));
+      assert.ok(Math.abs(tail.duration - 1) < 0.1, String(tail.duration));
+
+      // A Start past the end, or an End before Start, fails with why.
+      const late = await trim({ start: 9, end: 12 });
+      assert.equal(late.status, 'failed');
+      assert.match(late.error ?? '', /Start is after the end of the file/);
+      const backwards = await trim({ start: 2, end: 1 });
+      assert.equal(backwards.status, 'failed');
+      assert.match(backwards.error ?? '', /End must be after Start/);
+
+      // The other tests here expect the output folder as they left it.
+      for (const name of [...middle.outputs, ...rest.outputs]) {
+        rmSync(path.join(outDir(), name));
+      }
+    },
+  );
+
+  test(
+    "an editor's frames and waveform (Trim Video's timeline)",
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'timeline');
+      await fs.mkdir(dir, { recursive: true });
+      const loud = path.join(dir, 'loud.mov');
+      const silent = path.join(dir, 'silent.mp4');
+      // Two seconds of tone, then two of silence.
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=320x240:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=2,apad=whole_dur=4',
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-shortest',
+        loud,
+      ]);
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=2:size=320x240:rate=25',
+        '-c:v',
+        'mpeg4',
+        silent,
+      ]);
+
+      // A frame, as tall as asked for; none past the end.
+      const frame = await frameAt(vendorFfmpeg, loud, 1.5, 112);
+      assert.match(frame ?? '', /^data:image\/jpeg;base64,/);
+      assert.equal(await frameAt(vendorFfmpeg, loud, 60, 112), null);
+
+      // Loud where the tone is, quiet after it, the loudest at 1.
+      const peaks = await waveform(vendorFfmpeg, loud, 40);
+      assert.equal(peaks?.length, 40);
+      assert.equal(Math.max(...(peaks ?? [])), 1);
+      assert.ok((peaks?.[5] ?? 0) > 0.5, String(peaks?.[5]));
+      assert.ok((peaks?.[35] ?? 1) < 0.05, String(peaks?.[35]));
+      // No sound at all is no waveform.
+      assert.equal(await waveform(vendorFfmpeg, silent, 40), null);
+    },
+  );
+
+  test(
     'an HEVC video fails with a message that says why',
     { skip: process.platform !== 'darwin' && 'macOS only' },
     async () => {
@@ -2449,6 +2618,21 @@ describe(
           codecs[format],
           format,
         );
+      }
+    });
+
+    test('times are shown and typed as minutes and seconds', () => {
+      assert.equal(clock(0), '0:00.00');
+      assert.equal(clock(65.25), '1:05.25');
+      assert.equal(clock(3725.5), '1:02:05.50');
+      assert.equal(parseClock('1:05.25'), 65.25);
+      assert.equal(parseClock(' 1:02:05 '), 3725);
+      assert.equal(parseClock('65.5'), 65.5);
+      assert.equal(parseClock('12s'), 12);
+      assert.equal(parseClock('.5'), 0.5);
+      assert.equal(parseClock(clock(487.37)), 487.37);
+      for (const bad of ['', 'abc', '1:75', '1::2', '-3', '1:2:3:4']) {
+        assert.equal(parseClock(bad), null, bad);
       }
     });
 

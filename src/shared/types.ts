@@ -396,6 +396,29 @@ export type SessionMeta = {
 /** A file's picture and length, for History; null where it has none. */
 export type FilePreview = { thumbnail: string | null; duration: number | null };
 
+/**
+ * A file an editor on a tool's page shows (see MediaApi): one the user
+ * dropped or picked, by the token it was saved under, or an earlier
+ * stage's output, by the job that made it. Never a path.
+ */
+export type MediaRef =
+  | { source: 'file'; token: string }
+  | { source: 'tool' | 'download'; jobId: string; index: number };
+
+/** The API the preload exposes as `window.media`: a file's video to play,
+ *  its frames and its sound, for an editor such as Trim Video's. */
+export type MediaApi = {
+  /** Makes it playable in the page, as the player does a download. */
+  play(ref: MediaRef): Promise<PlaybackSource>;
+  /** Stops making it playable, when the editor goes first. */
+  cancelPlay(ref: MediaRef): Promise<void>;
+  /** Its frame `seconds` in, `height` pixels tall, as a data: URL. */
+  frame(ref: MediaRef, seconds: number, height: number): Promise<string | null>;
+  /** How loud it is along its length, as `count` peaks from 0 to 1; null
+   *  if it has no sound. */
+  waveform(ref: MediaRef, count: number): Promise<number[] | null>;
+};
+
 /** A tool session as History lists it. */
 export type SessionSummary = {
   id: string;

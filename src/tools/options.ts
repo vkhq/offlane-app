@@ -13,6 +13,7 @@ export {
   select,
   shownWhen,
   text,
+  time,
   timeRange,
   toggle,
   widthPx,

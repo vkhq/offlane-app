@@ -357,6 +357,27 @@ export function Canvas({ children }: { children: ReactNode }) {
     requestAnimationFrame(() => api.reveal(target, 'nearest'));
   };
 
+  /** A press on anything that can't take focus (the background, a
+   *  track, text) takes it from whatever had it, as a click on a page
+   *  does: the canvas's own drags stop the browser doing it. */
+  const onPointerDownCapture = (event: ReactPointerEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !viewport.current?.contains(target)) {
+      return;
+    }
+    if (
+      target.closest(
+        'button, a[href], input, textarea, select, [tabindex], [contenteditable="true"]',
+      )
+    ) {
+      return;
+    }
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused !== document.body) {
+      focused.blur();
+    }
+  };
+
   /** Drags the canvas: from its background, with the middle button, or
    *  anywhere with Space held. */
   const onPointerDown = (event: ReactPointerEvent) => {
@@ -433,6 +454,7 @@ export function Canvas({ children }: { children: ReactNode }) {
       <div
         ref={viewport}
         onPointerDown={onPointerDown}
+        onPointerDownCapture={onPointerDownCapture}
         onFocus={onFocus}
         style={background}
         className={`flow-canvas relative flex-1 touch-none overflow-hidden select-none ${
@@ -475,7 +497,9 @@ const zoomButton =
   'grid size-7 cursor-pointer place-items-center rounded-full text-ink-soft hover:bg-ink/5 hover:text-ink disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent';
 
 /** In the canvas's corner: zoom out, the zoom (press for 100%), zoom in,
- *  and fit everything in view. */
+ *  and fit everything in view. For the pointer only: they never take
+ *  focus, by click or Tab, so the keys stay with the page (the zoom has
+ *  its pinch and Control-scroll). */
 function ZoomControls({
   zoom,
   onZoomOut,
@@ -492,10 +516,13 @@ function ZoomControls({
   return (
     <div
       data-canvas-node
+      // A press doesn't focus them; the click still runs.
+      onMouseDown={(event) => event.preventDefault()}
       className="absolute right-4 bottom-4 flex items-center gap-0.5 rounded-full bg-canvas p-1 shadow-card"
     >
       <button
         type="button"
+        tabIndex={-1}
         aria-label="Zoom Out"
         title="Zoom Out"
         disabled={zoom <= minZoom + 0.001}
@@ -506,6 +533,7 @@ function ZoomControls({
       </button>
       <button
         type="button"
+        tabIndex={-1}
         title="Actual Size"
         onClick={onReset}
         className="h-7 w-12 cursor-pointer rounded-full text-[12px] font-medium text-ink-soft tabular-nums hover:bg-ink/5 hover:text-ink"
@@ -514,6 +542,7 @@ function ZoomControls({
       </button>
       <button
         type="button"
+        tabIndex={-1}
         aria-label="Zoom In"
         title="Zoom In"
         disabled={zoom >= maxZoom - 0.001}
@@ -524,6 +553,7 @@ function ZoomControls({
       </button>
       <button
         type="button"
+        tabIndex={-1}
         aria-label="Zoom to Fit"
         title="Zoom to Fit"
         onClick={onFit}

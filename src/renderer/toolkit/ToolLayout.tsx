@@ -10,13 +10,16 @@ import type { Tool } from './types';
  * page's first stage on it, its title and description over its workflow
  * (FlowNode steps joined by FlowLinks) in a column. The tools its results
  * go on to branch out below it, side by side, and theirs below them; once
- * they are wider or taller than the window, the canvas pans.
+ * they are wider or taller than the window, the canvas pans. A `wide`
+ * column suits a page that edits its file (Trim Video's timeline).
  */
 export function ToolLayout({
   tool,
+  wide = false,
   children,
 }: {
   tool: Tool;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -24,7 +27,7 @@ export function ToolLayout({
       <StepsProvider>
         <Canvas>
           <div className="flex flex-col items-center">
-            <div className="flex w-132 flex-col">
+            <div className={`flex flex-col ${wide ? 'w-180' : 'w-132'}`}>
               <div className="pb-6 text-center">
                 <h1 className="font-serif text-[26px] leading-tight font-bold">
                   {tool.name}

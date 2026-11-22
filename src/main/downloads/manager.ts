@@ -521,11 +521,14 @@ export class DownloadManager extends EventEmitter<{
 
     // Metadata, unless a fresh probe is at hand.
     let info = this.jobInfo.get(job.id);
+    /** Whether this run looked the video up itself (not the preview's). */
+    let lookedUp = false;
     if (
       !info ||
       !existsSync(info.path) ||
       Date.now() - info.fetchedAt > probeMaxAge
     ) {
+      lookedUp = true;
       this.setStatus(job, 'probing');
       try {
         const outcome = await probe({
@@ -644,7 +647,17 @@ export class DownloadManager extends EventEmitter<{
       this.setStatus(job, 'completed');
       return;
     }
-    this.fail(job, classifyError(result.stderrTail));
+    const error = classifyError(result.stderrTail);
+    // A site refusing the links an earlier lookup saved (YouTube's, when
+    // they were made without their challenge solved, or have gone stale):
+    // once, looked up again and retried straight away, from where the
+    // .part files left off.
+    if (!lookedUp && /HTTP Error 403/i.test(error.raw)) {
+      this.forgetLookup(info.path);
+      this.setStatus(job, 'queued');
+      return;
+    }
+    this.fail(job, error);
   }
 
   /** What a user's stop means, once the process has exited. */
@@ -723,6 +736,18 @@ export class DownloadManager extends EventEmitter<{
       await fs.rm(info.path, { force: true }).catch(() => {});
       this.jobInfo.delete(id);
     }
+  }
+
+  /** Drops a saved lookup whose links a site refused: from the jobs and
+   *  previews that would use it, and its file. */
+  private forgetLookup(file: string): void {
+    for (const [id, info] of this.jobInfo) {
+      if (info.path === file) this.jobInfo.delete(id);
+    }
+    for (const [token, outcome] of this.probes) {
+      if (outcome.infoJsonPath === file) this.probes.delete(token);
+    }
+    void fs.rm(file, { force: true }).catch(() => {});
   }
 
   /** Keeps the 50 latest probes, and their files unless a job needs them. */

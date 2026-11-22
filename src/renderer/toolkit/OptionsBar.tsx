@@ -1,11 +1,13 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   type OptionValues,
   type Options,
   type Setting,
   type SettingValue,
+  clock,
   isShown,
+  parseClock,
 } from '../../shared/tools';
 import { ArrowRight, ChevronDown } from '../components/icons';
 import { FlowLink } from './Flow';
@@ -110,7 +112,9 @@ function summarize(setting: Setting, value: SettingValue): string | null {
     case 'toggle':
       return value ? setting.label : null;
     case 'number':
-      return `${setting.label} ${value}${setting.unit ?? ''}`;
+      return setting.time
+        ? `${setting.label} ${clock(Number(value))}`
+        : `${setting.label} ${value}${setting.unit ?? ''}`;
     case 'text':
     case 'file':
       return String(value) || null;
@@ -141,7 +145,9 @@ function shownValue(setting: Setting, value: SettingValue) {
     case 'toggle':
       return value ? 'On' : 'Off';
     case 'number':
-      return `${value}${setting.unit ?? ''}`;
+      return setting.time
+        ? clock(Number(value))
+        : `${value}${setting.unit ?? ''}`;
     case 'password':
       return value ? 'Set' : 'None';
     case 'info':
@@ -252,6 +258,26 @@ function Title({
     case 'text':
     case 'password':
       // A menu holding a field, typed into in place.
+      if (setting.kind === 'number' && setting.time) {
+        return (
+          <SelectMenu
+            {...menu}
+            value=""
+            choices={[]}
+            onChange={() => {}}
+            field={
+              <label className="flex min-w-48 items-center p-[3px]">
+                <TimeField
+                  label={setting.label}
+                  seconds={Number(value)}
+                  disabled={readOnly}
+                  onChange={onChange}
+                />
+              </label>
+            }
+          />
+        );
+      }
       return (
         <SelectMenu
           {...menu}
@@ -331,3 +357,76 @@ function Title({
 const chooseFile = '\u0000choose';
 
 const tens = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10];
+
+/**
+ * A time option's field: shows "1:05.25", and is typed into the same way
+ * (or as plain seconds). What is typed is kept once it is left or Enter is
+ * pressed, if it is a time; Escape puts back what it was.
+ */
+function TimeField({
+  label,
+  seconds,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  seconds: number;
+  disabled: boolean;
+  onChange: (seconds: number) => void;
+}) {
+  // What is typed, while it is being typed; else the value, as a time.
+  const [typed, setTyped] = useState<string | null>(null);
+  const latest = useRef<string | null>(null);
+  const type = (text: string | null) => {
+    latest.current = text;
+    setTyped(text);
+  };
+  const change = useRef(onChange);
+  change.current = onChange;
+  const commit = () => {
+    const parsed = latest.current === null ? null : parseClock(latest.current);
+    if (parsed !== null) change.current(parsed);
+    return parsed;
+  };
+  // A press outside closes the menu before the field hears it is left:
+  // what was typed is kept then too.
+  useEffect(
+    () => () => {
+      commit();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const invalid = typed !== null && parseClock(typed) === null;
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      spellCheck={false}
+      disabled={disabled}
+      aria-label={label}
+      aria-invalid={invalid}
+      title="Minutes:seconds, as 1:05.25, or seconds"
+      value={typed ?? clock(seconds)}
+      onFocus={(event) => {
+        type(clock(seconds));
+        event.currentTarget.select();
+      }}
+      onChange={(event) => type(event.target.value)}
+      onBlur={() => {
+        commit();
+        type(null);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const parsed = commit();
+          if (parsed !== null) type(clock(parsed));
+        } else if (event.key === 'Escape') {
+          type(null);
+        }
+      }}
+      className={`${field} tabular-nums aria-invalid:ring-2 aria-invalid:ring-brand/50`}
+    />
+  );
+}

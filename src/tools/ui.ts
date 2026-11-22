@@ -38,7 +38,11 @@ export { useToolForm } from '../renderer/toolkit/useToolForm';
 export { invalidLink, toLink } from '../renderer/toolkit/links';
 export * from '../renderer/toolkit/inputs';
 export * as styles from '../renderer/toolkit/styles';
-export { standardTool } from '../renderer/toolkit/standardTool';
+export {
+  standardTool,
+  type ToolEditorProps,
+} from '../renderer/toolkit/standardTool';
+export { TrimEditor } from '../renderer/toolkit/TrimEditor';
 export {
   defineTool,
   type Tool,

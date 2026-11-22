@@ -478,6 +478,7 @@ registerIpc({
   sessions,
   recordings,
   previewFile: (file) => previewFile(ffmpegTools(), file),
+  ffmpeg: () => ffmpegTools()?.ffmpeg ?? null,
   tools,
   settings,
   toolkits,
@@ -536,10 +537,23 @@ app.whenReady().then(() => {
   });
 });
 
+/** Quitting: once before-quit has begun its steps, and once they are
+ *  done (see below). */
+let quitting = false;
+let quitStepsDone = false;
+
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
+  // Quitting, Electron closes the windows and quits without this event;
+  // it comes anyway when the quit began with a SIGTERM (as `npm start`
+  // sends to restart the app once main is rebuilt), and Electron then goes
+  // no further. Its own steps (see before-quit) are done by then.
+  if (quitStepsDone) {
+    app.exit(0);
+    return;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -548,7 +562,6 @@ app.on('window-all-closed', () => {
 // Downloads stop before the app does: yt-dlp and ffmpeg run in their own
 // process group, so they would otherwise keep writing after it's gone.
 // Their .part files stay, and the jobs resume on the next launch.
-let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
@@ -577,6 +590,7 @@ app.on('before-quit', (event) => {
     .finally(() => {
       step('settings', () => settings.flush());
       step('sessions', () => sessions.close());
+      quitStepsDone = true;
       app.quit();
     });
 });

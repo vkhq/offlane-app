@@ -34,6 +34,7 @@ import type { SessionStore } from './storage/sessions';
 import { installedBrowsers } from './engine/browsers';
 import { ProbeError } from './engine/probe';
 import { fetchThumbnail } from './engine/thumbnail';
+import { frameAt, waveform } from './media';
 import { resolveOutputs } from './tools/outputs';
 import type { SettingsStore } from './storage/settings';
 import type { ToolQueue } from './tools/queue';
@@ -49,6 +50,8 @@ export type IpcDeps = {
   sessions: SessionStore;
   /** A file's picture and length, for History (see preview.ts). */
   previewFile: (file: string) => Promise<FilePreview>;
+  /** The app's ffmpeg, for an editor's frames and waveform, or null. */
+  ffmpeg: () => string | null;
   /** Every other tool's jobs (see src/tools). */
   tools: ToolQueue;
   /** Recordings made in the page, until a tool runs on them. */
@@ -417,6 +420,73 @@ export function registerIpc(deps: IpcDeps): void {
       previews.set(token, pending);
     }
     return pending;
+  });
+  // An editor's file (see media.ts): one the user added, by its token, or
+  // an earlier output, by its job; its path comes from our own records.
+  const mediaOf = (raw: unknown): { id: string; file: string } => {
+    const ref = (raw ?? {}) as { source?: unknown; token?: unknown };
+    let id: string;
+    let file: string | null;
+    if (ref.source === 'file') {
+      if (!isString(ref.token, 64)) throw new Error('Invalid request');
+      id = `file-${ref.token}`;
+      file = deps.sessions.filePath(ref.token);
+    } else {
+      const output = raw as { jobId: string; index: number };
+      [file] = resolveOutputs([raw], {
+        toolOutputs: (jobId) => deps.tools.outputsOf(jobId),
+        download: (jobId) => manager.get(jobId),
+      });
+      id = output.index ? `${output.jobId}-${output.index}` : output.jobId;
+    }
+    if (!file || !existsSync(file)) {
+      throw new Error('That file is no longer available.');
+    }
+    return { id, file };
+  };
+  const ffmpegOrFail = () => {
+    const ffmpeg = deps.ffmpeg();
+    if (!ffmpeg) throw new Error('FFmpeg isn’t installed yet.');
+    return ffmpeg;
+  };
+  handle(IPC.mediaPlay, (ref: unknown) => {
+    const { id, file } = mediaOf(ref);
+    return deps.player.prepare(id, file);
+  });
+  handle(IPC.mediaCancelPlay, (ref: unknown) =>
+    deps.player.cancel(mediaOf(ref).id),
+  );
+  handle(IPC.mediaFrame, (ref: unknown, seconds: unknown, height: unknown) => {
+    const { file } = mediaOf(ref);
+    if (
+      typeof seconds !== 'number' ||
+      !Number.isFinite(seconds) ||
+      typeof height !== 'number' ||
+      !(height >= 16 && height <= 720)
+    ) {
+      throw new Error('Invalid request');
+    }
+    return frameAt(ffmpegOrFail(), file, seconds, height);
+  });
+  // Read once per file and length: it reads the whole of its sound.
+  const waveforms = new Map<string, Promise<number[] | null>>();
+  handle(IPC.mediaWaveform, (ref: unknown, count: unknown) => {
+    const { file } = mediaOf(ref);
+    if (
+      !Number.isInteger(count) ||
+      (count as number) < 1 ||
+      (count as number) > 2000
+    ) {
+      throw new Error('Invalid request');
+    }
+    const key = `${file}:${count}`;
+    let found = waveforms.get(key);
+    if (!found) {
+      found = waveform(ffmpegOrFail(), file, count as number);
+      found.catch(() => waveforms.delete(key));
+      waveforms.set(key, found);
+    }
+    return found;
   });
   handle(IPC.toolsSaveRecording, (data: unknown, type: unknown) => {
     const bytes =

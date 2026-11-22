@@ -32,4 +32,5 @@ interface Window {
   storage: import('../shared/storage').StorageApi;
   tools: import('../shared/tools').ToolsApi;
   sessions: import('../shared/types').SessionsApi;
+  media: import('../shared/types').MediaApi;
 }

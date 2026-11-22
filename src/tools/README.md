@@ -48,6 +48,13 @@ page and when it is used as a later step, so never rebuild any of it:
   or picked ones sit under the drop zone, which stays to add more, each
   with a ✕ to take it out; an earlier stage's have a checkbox to run on
   it or not.
+- **Editor (optional):** `editor: TrimEditor` shows the file in an editor
+  in place of the strip, to set options by hand, and makes the tool work on
+  one file at a time (on a later step, its checkboxes pick one). Trim
+  Video's sets Start and End on a timeline of the video's frames
+  (`TrimEditor`); an editor gets the file as a `MediaRef` and plays it,
+  and asks for its frames (or a waveform), through `window.media`. A tool
+  with an editor gets a wider column.
 - **Options:** a "<Tool> Options" chip on the link to them, the menu bar of
   options, and the button, counting what it runs on ("Mute 2 Videos"); kept
   as a read-only record once run (`RunSection`).

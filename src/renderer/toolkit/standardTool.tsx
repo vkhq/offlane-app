@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { type ComponentType, useEffect, useState } from 'react';
 
-import type { Options } from '../../shared/tools';
+import type { Options, SettingValue } from '../../shared/tools';
 import { addActivity } from '../history';
-import type { SavedFile, SessionStatus } from '../../shared/types';
-import { useSession } from '../sessions';
+import type { MediaRef, SavedFile, SessionStatus } from '../../shared/types';
+import { savedFileOf, useSession } from '../sessions';
 import { useTabState } from '../tabState';
 import { CloudUpload, Link2, Mic } from '../components/icons';
 import { DropZone, type Item } from './DropZone';
@@ -30,7 +30,45 @@ export type StandardTool<O extends Options> = {
   options: O;
   /** Label of the action button. */
   action: string;
+  /**
+   * Shown in place of the file once one is added, to set the options on
+   * it by hand, as Trim Video's timeline sets Start and End (see
+   * TrimEditor). A tool with an editor works on one file at a time, on its
+   * own page and as a later step.
+   */
+  editor?: ComponentType<ToolEditorProps>;
 };
+
+/** What a tool's editor (see StandardTool.editor) is given. */
+export type ToolEditorProps = {
+  /** The file it works on, once the main process knows it. */
+  media: MediaRef | null;
+  /** The tool's option values, which it shows and sets. */
+  values: Record<string, SettingValue>;
+  /** Sets some of the options at once. */
+  onChange: (patch: Record<string, SettingValue>) => void;
+  /** Run: shown as the record of what was done, not changed. */
+  locked: boolean;
+  /** Takes the file out, back to the drop zone; none on a later step. */
+  onRemove?: () => void;
+};
+
+/** A dropped or picked file as an editor names it: by its token. */
+function useMediaRef(item: Item | undefined): MediaRef | null {
+  const [ref, setRef] = useState<MediaRef | null>(null);
+  useEffect(() => {
+    setRef(null);
+    if (!item || typeof item === 'string') return;
+    let live = true;
+    savedFileOf(item)
+      .then((saved) => live && setRef({ source: 'file', token: saved.token }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [item]);
+  return ref;
+}
 
 const inputSteps = {
   drop: { title: 'Add Files', icon: CloudUpload },
@@ -49,7 +87,7 @@ export function standardTool<O extends Options>(
   config: StandardTool<O>,
 ): StandardToolPage {
   const page: ToolPage = function StandardToolPage({ tool }) {
-    const { input, options, action } = config;
+    const { input, options, action, editor: Editor } = config;
     const [values, setValue] = useToolForm(options);
     const [items, setItems] = useTabState<Item[]>('items', []);
     /** The file picked for each file option, kept with the tab (sessions
@@ -185,15 +223,20 @@ export function standardTool<O extends Options>(
 
     const step = inputSteps[input.kind];
     const count = items.length;
+    // A tool with an editor shows it in place of its one file.
+    const editing = Editor && typeof items[0] === 'object' ? items[0] : null;
+    const media = useMediaRef(editing ?? undefined);
 
     return (
-      <ToolLayout tool={tool}>
+      <ToolLayout tool={tool} wide={!!Editor}>
         <FlowNode
           icon={step.icon}
           title={input.kind === 'link' ? input.label : step.title}
           detail={
             input.kind === 'drop' && count > 0
-              ? `${count} ${count === 1 ? 'item' : 'items'}`
+              ? editing
+                ? editing.name
+                : `${count} ${count === 1 ? 'item' : 'items'}`
               : undefined
           }
           aside={(ready || own.length > 0) && <StartOver onClick={startOver} />}
@@ -221,8 +264,22 @@ export function standardTool<O extends Options>(
               }
             />
           )}
-          {input.kind === 'drop' && (
+          {input.kind === 'drop' && Editor && editing && (
+            <Editor
+              media={media}
+              values={values}
+              onChange={(patch) => {
+                for (const [key, value] of Object.entries(patch)) {
+                  setValue(key as keyof typeof options & string, value);
+                }
+              }}
+              locked={locked}
+              onRemove={() => setItems([])}
+            />
+          )}
+          {input.kind === 'drop' && !editing && (
             <DropZone
+              single={!!Editor}
               input={input}
               items={items}
               locked={locked}

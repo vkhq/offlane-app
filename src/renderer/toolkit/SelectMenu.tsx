@@ -99,11 +99,17 @@ export function SelectMenu({
       window.innerWidth - width - margin,
     );
     setPlace({ left, top });
-    // A field takes the keys; a list is moved through with the arrows.
+  }, [open, align, readOnly]);
+
+  // Once placed (a hidden menu can't take focus): a field takes the keys;
+  // a list is moved through with the arrows.
+  const placed = place !== null;
+  useLayoutEffect(() => {
+    if (!placed || !menu.current) return;
     const input = menu.current.querySelector('input');
     if (input && !readOnly) input.focus();
     else menu.current.focus();
-  }, [open, align, readOnly]);
+  }, [placed, readOnly]);
 
   // Any press outside, scroll, the canvas moving, resize or the window
   // losing focus closes it.

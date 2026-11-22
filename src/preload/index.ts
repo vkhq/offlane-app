@@ -24,6 +24,7 @@ import type {
   PlaybackProgress,
   ProbeResult,
   SavedFile,
+  MediaApi,
   SessionsApi,
 } from '../shared/types';
 
@@ -144,6 +145,14 @@ const tools: ToolsApi = {
   onJobRemoved: (cb) => on<string>(IPC.toolJobRemoved, cb),
 };
 
+// A file an editor shows, named by token or job, never by path.
+const media: MediaApi = {
+  play: (ref) => call(IPC.mediaPlay, ref),
+  cancelPlay: (ref) => call(IPC.mediaCancelPlay, ref),
+  frame: (ref, seconds, height) => call(IPC.mediaFrame, ref, seconds, height),
+  waveform: (ref, count) => call(IPC.mediaWaveform, ref, count),
+};
+
 const sessions: SessionsApi = {
   save: (session) => call(IPC.sessionsSave, session),
   list: () => call(IPC.sessionsList),
@@ -167,6 +176,7 @@ const sessions: SessionsApi = {
 
 contextBridge.exposeInMainWorld('downloader', downloader);
 contextBridge.exposeInMainWorld('sessions', sessions);
+contextBridge.exposeInMainWorld('media', media);
 contextBridge.exposeInMainWorld('tools', tools);
 contextBridge.exposeInMainWorld('externalTools', externalTools);
 const storage: StorageApi = {

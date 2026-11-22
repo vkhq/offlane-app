@@ -177,19 +177,20 @@ async function serialize(value: unknown): Promise<unknown> {
  * for a session, so the page never learns its path.
  */
 export async function itemPreview(item: File | SavedFile) {
-  let saved: SavedFile;
-  if (item instanceof File) {
-    let pending = savedFiles.get(item);
-    if (!pending) {
-      pending = window.sessions.saveFile(item);
-      savedFiles.set(item, pending);
-      pending.catch(() => savedFiles.delete(item));
-    }
-    saved = await pending;
-  } else {
-    saved = item;
+  return previewOf((await savedFileOf(item)).token);
+}
+
+/** A dropped or picked file as the main process knows it: noted once, by
+ *  a token, so the page can name it without its path. */
+export function savedFileOf(item: File | SavedFile): Promise<SavedFile> {
+  if (!(item instanceof File)) return Promise.resolve(item);
+  let pending = savedFiles.get(item);
+  if (!pending) {
+    pending = window.sessions.saveFile(item);
+    savedFiles.set(item, pending);
+    pending.catch(() => savedFiles.delete(item));
   }
-  return previewOf(saved.token);
+  return pending;
 }
 
 /** Files' previews by token, asked of the main process once each. */

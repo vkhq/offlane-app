@@ -110,18 +110,28 @@ function StepCard({ step }: { step: Step }) {
   if (!steps || !tool) return null;
   const values = config ? parseValues(config.options, step.values) : null;
   // Of several inputs, those ticked; all of them once it has run, as
-  // they were then.
+  // they were then. A tool with an editor works on one: the first not
+  // left out.
   const skipped = step.skipped ?? [];
-  const chosen = step.inputs.filter((_, index) => !skipped.includes(index));
+  const Editor = config?.editor;
+  const only = step.inputs.findIndex((_, index) => !skipped.includes(index));
+  const isChosen = (index: number) =>
+    Editor ? index === only : !skipped.includes(index);
+  const chosen = step.inputs.filter((_, index) => isChosen(index));
   // Run, what it ran on is a record (see runsLock).
   const ran = runsLock(
     step.jobIds.map((id) => allJobs.find((job) => job.id === id)),
   );
   const toggle = (index: number) =>
     steps.update(step.id, {
-      skipped: skipped.includes(index)
-        ? skipped.filter((other) => other !== index)
-        : [...skipped, index],
+      skipped: Editor
+        ? // Ticking one picks it in place of the other.
+          step.inputs
+            .map((_, other) => other)
+            .filter((other) => other !== index)
+        : skipped.includes(index)
+          ? skipped.filter((other) => other !== index)
+          : [...skipped, index],
     });
 
   const run = async () => {
@@ -174,8 +184,8 @@ function StepCard({ step }: { step: Step }) {
   const action =
     tool.name.replace(new RegExp(`\\s+(${noun})$`), '') || tool.name;
   const what =
-    step.inputs.length === 1
-      ? step.inputs[0].name
+    step.inputs.length === 1 || Editor
+      ? (chosen[0] ?? step.inputs[0]).name
       : chosen.length === step.inputs.length
         ? `${step.inputs.length} files`
         : `${chosen.length} of ${step.inputs.length} files`;
@@ -204,20 +214,39 @@ function StepCard({ step }: { step: Step }) {
             )
           }
         >
-          {/* What it works on, as every stage shows its files. */}
-          <div className="rounded-2xl bg-canvas px-4 py-3 shadow-card">
-            <MediaStrip
-              // Sizes only where the tool is about them (see withSizes).
-              items={
-                config?.input.kind === 'drop' && config.input.sizes
-                  ? strip
-                  : strip.map((item) => ({ ...item, size: undefined }))
+          {/* What it works on, as every stage shows its files; with an
+              editor, only to pick which, among several. */}
+          {(!Editor || step.inputs.length > 1) && (
+            <div className="rounded-2xl bg-canvas px-4 py-3 shadow-card">
+              <MediaStrip
+                // Sizes only where the tool is about them (see withSizes).
+                items={
+                  config?.input.kind === 'drop' && config.input.sizes
+                    ? strip
+                    : strip.map((item) => ({ ...item, size: undefined }))
+                }
+                ticked={isChosen}
+                locked={ran}
+                onToggle={toggle}
+                verb={Editor ? 'Pick' : 'Use'}
+              />
+            </div>
+          )}
+          {Editor && values && chosen[0] && (
+            <Editor
+              key={`${chosen[0].jobId}:${chosen[0].index}`}
+              media={{
+                source: chosen[0].source,
+                jobId: chosen[0].jobId,
+                index: chosen[0].index,
+              }}
+              values={values}
+              onChange={(patch) =>
+                steps.update(step.id, { values: { ...step.values, ...patch } })
               }
-              ticked={(index) => !skipped.includes(index)}
               locked={ran}
-              onToggle={toggle}
             />
-          </div>
+          )}
           {config === null && (
             <p className="px-1 text-[13px] text-ink-soft">
               {tool.name} can't be used as a step.

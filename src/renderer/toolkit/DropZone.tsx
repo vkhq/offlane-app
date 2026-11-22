@@ -91,8 +91,11 @@ export function DropZone({
   onLinkChange,
   onNotice,
   locked = false,
+  single = false,
 }: {
   input: DropInput;
+  /** One file at a time: another added takes its place. */
+  single?: boolean;
   items: Item[];
   /** Shown but not changed, as once a run has started on them: nothing
    *  added, removed or moved. */
@@ -121,7 +124,8 @@ export function DropZone({
   const picker = useRef<HTMLInputElement>(null);
 
   const add = (added: Item[]) => {
-    onItemsChange([...items, ...added]);
+    if (added.length === 0) return;
+    onItemsChange(single ? added.slice(0, 1) : [...items, ...added]);
     onNotice('');
   };
 
@@ -184,7 +188,7 @@ export function DropZone({
       <input
         ref={picker}
         type="file"
-        multiple
+        multiple={!single}
         hidden
         accept={input.accept}
         onChange={(event) => {
@@ -215,7 +219,9 @@ export function DropZone({
             <CloudUpload size={18} />
           </span>
           <p className="pt-2 font-medium">
-            Choose files or drag &amp; drop them here
+            {single
+              ? 'Choose a file or drag & drop it here'
+              : 'Choose files or drag & drop them here'}
           </p>
           <p className="pt-0.5 text-xs text-ink-faint">
             Supports {input.formats}

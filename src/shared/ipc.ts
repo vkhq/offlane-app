@@ -57,6 +57,10 @@ export const IPC = {
   sessionsClear: 'sessions:clear',
   sessionsAddFile: 'sessions:add-file',
   sessionsPreview: 'sessions:preview',
+  mediaPlay: 'media:play',
+  mediaCancelPlay: 'media:cancel-play',
+  mediaFrame: 'media:frame',
+  mediaWaveform: 'media:waveform',
   // main → renderer events
   jobUpdated: 'dl:job-updated',
   jobRemoved: 'dl:job-removed',
