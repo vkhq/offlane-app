@@ -28,6 +28,7 @@ import { SelectMenu } from './SelectMenu';
 export function OptionsBar<O extends Options>({
   options,
   values,
+  hints,
   onChange,
   onFile,
   action,
@@ -37,6 +38,9 @@ export function OptionsBar<O extends Options>({
 }: {
   options: O;
   values: OptionValues<O>;
+  /** Words beside a select's choices, by option and choice (an editor's,
+   *  from what it knows of the file). */
+  hints?: Record<string, Record<string, string>>;
   onChange: (key: keyof O & string, value: SettingValue) => void;
   /** The file picked for a file option; its name goes to `onChange`. */
   onFile?: (key: keyof O & string, file: File) => void;
@@ -64,6 +68,7 @@ export function OptionsBar<O extends Options>({
               key={key}
               setting={setting}
               value={values[key]}
+              hints={hints?.[key]}
               readOnly={disabled}
               onChange={(value) => onChange(key, value)}
               onFile={(file) => onFile?.(key, file)}
@@ -161,12 +166,14 @@ function shownValue(setting: Setting, value: SettingValue) {
 function Title({
   setting,
   value,
+  hints,
   readOnly,
   onChange,
   onFile,
 }: {
   setting: Setting;
   value: SettingValue;
+  hints?: Record<string, string>;
   readOnly: boolean;
   onChange: (value: SettingValue) => void;
   onFile: (file: File) => void;
@@ -215,7 +222,11 @@ function Title({
         <SelectMenu
           {...menu}
           value={String(value)}
-          choices={setting.options.map((option) => [option, option])}
+          choices={setting.options.map((option) => [
+            option,
+            option,
+            hints?.[option],
+          ])}
           onChange={onChange}
         />
       );

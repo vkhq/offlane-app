@@ -43,6 +43,7 @@ export {
   type ToolEditorProps,
 } from '../renderer/toolkit/standardTool';
 export { TrimEditor } from '../renderer/toolkit/TrimEditor';
+export { ResizeEditor } from '../renderer/toolkit/ResizeEditor';
 export {
   defineTool,
   type Tool,

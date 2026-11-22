@@ -11,7 +11,7 @@ import { Arrow, FlowNode } from './Flow';
 import { noteToolJobs, useAllJobs, useConnected } from './jobs';
 import { type MediaItem, MediaStrip } from './MediaStrip';
 import { RunSection, runsLock } from './RunSection';
-import type { StandardTool } from './standardTool';
+import type { OptionHints, StandardTool } from './standardTool';
 import { StageContext, type Step, type StepInput, useSteps } from './steps';
 import { iconButton } from './styles';
 
@@ -85,6 +85,7 @@ function StepCard({ step }: { step: Step }) {
   const [config, setConfig] = useState<StandardTool<Options> | null>();
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [hints, setHints] = useState<OptionHints>({});
   const card = useRef<HTMLElement>(null);
   const canvas = useCanvas();
 
@@ -240,11 +241,13 @@ function StepCard({ step }: { step: Step }) {
                 jobId: chosen[0].jobId,
                 index: chosen[0].index,
               }}
+              options={config.options}
               values={values}
               onChange={(patch) =>
                 steps.update(step.id, { values: { ...step.values, ...patch } })
               }
               locked={ran}
+              onHints={setHints}
             />
           )}
           {config === null && (
@@ -259,6 +262,7 @@ function StepCard({ step }: { step: Step }) {
             tool={tool}
             config={config}
             values={values}
+            hints={Editor ? hints : undefined}
             onChange={(key, value) =>
               steps.update(step.id, {
                 values: { ...step.values, [key]: value },

@@ -271,6 +271,9 @@ export type PlaybackSource = {
   prepared: 'direct' | 'remux' | 'transcode';
   /** Width over height of its picture, as shown; null for audio or if unknown. */
   aspect: number | null;
+  /** Its picture's size in pixels, as shown (turned for a phone video
+   *  stored on its side); null for audio or if unknown. */
+  size: { width: number; height: number } | null;
   /** The file's audio tracks, in its order; empty if it has one or none. */
   audioTracks: PlaybackTrack[];
   /** Which of `audioTracks` this URL plays. */

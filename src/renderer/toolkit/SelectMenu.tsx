@@ -32,8 +32,9 @@ export function SelectMenu({
 }: {
   label: string;
   value: string;
-  /** Each choice as [value, label]. */
-  choices: [string, string][];
+  /** Each choice as [value, label], and words shown after the label, in a
+   *  softer grey ("→ 608 × 1080"). */
+  choices: [string, string, string?][];
   disabled?: boolean;
   /** Opens to show the choice made, the rest greyed out, but changes
    *  nothing: a step that has run. */
@@ -220,7 +221,7 @@ export function SelectMenu({
             className="fixed z-50 flex max-h-80 min-w-40 flex-col overflow-y-auto rounded-[14px] bg-menu/70 p-[5px] text-[13px] text-ink shadow-menu outline-none backdrop-blur-xl backdrop-saturate-[1.8]"
           >
             {field}
-            {choices.map(([option, text], index) => {
+            {choices.map(([option, text, detail], index) => {
               const chosen = option === value;
               const lit = index === active && !readOnly;
               return (
@@ -239,6 +240,13 @@ export function SelectMenu({
                     {chosen && <Check size={12} strokeWidth={2.75} />}
                   </span>
                   {text}
+                  {detail && (
+                    <span
+                      className={`ml-auto pl-4 ${lit ? 'text-accent-ink/75' : 'text-ink-faint'}`}
+                    >
+                      {detail}
+                    </span>
+                  )}
                 </div>
               );
             })}

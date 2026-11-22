@@ -9,7 +9,7 @@ import {
 import { FlowLink, FlowNode, FlowNotice } from './Flow';
 import { JobResults } from './JobList';
 import { OptionsBar } from './OptionsBar';
-import type { StandardTool } from './standardTool';
+import type { OptionHints, StandardTool } from './standardTool';
 import type { Tool } from './types';
 import { countedAction, progressive } from './verbs';
 
@@ -42,6 +42,7 @@ export function RunSection<O extends Options>({
   tool,
   config,
   values,
+  hints,
   onChange,
   onFile,
   count,
@@ -55,6 +56,8 @@ export function RunSection<O extends Options>({
   tool: Tool;
   config: StandardTool<O>;
   values: OptionValues<O>;
+  /** Its editor's words beside the choices (see OptionHints). */
+  hints?: OptionHints;
   onChange: (key: keyof O & string, value: SettingValue) => void;
   onFile: (key: keyof O & string, file: File) => void;
   /** How many files it will run on, and of what kind, for its button
@@ -90,6 +93,7 @@ export function RunSection<O extends Options>({
             <OptionsBar
               options={options}
               values={values}
+              hints={hints}
               onChange={onChange}
               onFile={onFile}
               action={label}

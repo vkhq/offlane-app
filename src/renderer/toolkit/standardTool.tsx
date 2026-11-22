@@ -39,10 +39,19 @@ export type StandardTool<O extends Options> = {
   editor?: ComponentType<ToolEditorProps>;
 };
 
+/**
+ * Words an editor adds to an option's choices, by option key and then by
+ * choice, from what it knows of the file: Resize Video's "→ 608 × 1080"
+ * beside a size a portrait video only fits inside.
+ */
+export type OptionHints = Record<string, Record<string, string>>;
+
 /** What a tool's editor (see StandardTool.editor) is given. */
 export type ToolEditorProps = {
   /** The file it works on, once the main process knows it. */
   media: MediaRef | null;
+  /** The tool's options, for the choices it works with. */
+  options: Options;
   /** The tool's option values, which it shows and sets. */
   values: Record<string, SettingValue>;
   /** Sets some of the options at once. */
@@ -51,6 +60,8 @@ export type ToolEditorProps = {
   locked: boolean;
   /** Takes the file out, back to the drop zone; none on a later step. */
   onRemove?: () => void;
+  /** Sets the words shown beside the options' choices (see OptionHints). */
+  onHints: (hints: OptionHints) => void;
 };
 
 /** A dropped or picked file as an editor names it: by its token. */
@@ -98,6 +109,7 @@ export function standardTool<O extends Options>(
     const [link, setLink] = useTabState('link', '');
     const [notice, setNotice] = useTabState('notice', '');
     const [busy, setBusy] = useState(false);
+    const [hints, setHints] = useState<OptionHints>({});
     /** The runs started from this tab: the workflow's results. */
     const [own, setOwn] = useTabState<string[]>('jobs', []);
     const recording = useRecording();
@@ -267,6 +279,7 @@ export function standardTool<O extends Options>(
           {input.kind === 'drop' && Editor && editing && (
             <Editor
               media={media}
+              options={options}
               values={values}
               onChange={(patch) => {
                 for (const [key, value] of Object.entries(patch)) {
@@ -274,7 +287,11 @@ export function standardTool<O extends Options>(
                 }
               }}
               locked={locked}
-              onRemove={() => setItems([])}
+              onRemove={() => {
+                setItems([]);
+                setHints({});
+              }}
+              onHints={setHints}
             />
           )}
           {input.kind === 'drop' && !editing && (
@@ -306,6 +323,7 @@ export function standardTool<O extends Options>(
             tool={tool}
             config={config}
             values={values}
+            hints={editing ? hints : undefined}
             onChange={setValue}
             onFile={(key, file) =>
               setAttachments((current) => ({ ...current, [key]: file }))

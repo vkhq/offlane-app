@@ -8,15 +8,14 @@ import {
 } from 'react';
 
 import { clock } from '../../shared/tools';
-import type { MediaRef, PlaybackSource } from '../../shared/types';
+import type { MediaRef } from '../../shared/types';
 import {
   ChevronLeft,
   ChevronRight,
   LoaderCircle,
-  Play,
   X,
 } from '../components/icons';
-import { Pause } from './playerIcons';
+import { PlayButton, useEditorVideo } from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
 
 /** The shortest part that can be kept, in seconds. */
@@ -45,8 +44,6 @@ const rulerSteps = [
 const round = (seconds: number) => Math.round(seconds * 100) / 100;
 const clamp = (value: number, low: number, high: number) =>
   Math.min(high, Math.max(low, value));
-const keyOf = (ref: MediaRef) =>
-  ref.source === 'file' ? ref.token : `${ref.jobId}:${ref.index}`;
 
 /** Frames by file, moment and height, asked of the main process once. */
 const frames = new Map<string, Promise<string | null>>();
@@ -75,8 +72,7 @@ export function TrimEditor({
 }: ToolEditorProps) {
   const video = useRef<HTMLVideoElement>(null);
   const lane = useRef<HTMLDivElement>(null);
-  const [source, setSource] = useState<PlaybackSource | null>(null);
-  const [failed, setFailed] = useState('');
+  const { source, failed, mediaKey } = useEditorVideo(media);
   const [duration, setDuration] = useState<number | null>(null);
   const [aspect, setAspect] = useState(16 / 9);
   const [time, setTime] = useState(0);
@@ -86,36 +82,14 @@ export function TrimEditor({
   /** Whether playing stops at End: only if it started before it. */
   const stopAtEnd = useRef(true);
 
-  const mediaKey = media ? keyOf(media) : '';
-
-  // The video, made playable in the page (rewrapped or converted first if
-  // Chromium can't play it as it is).
+  // A new file starts from its beginning, its length not yet known.
   useEffect(() => {
-    if (!media) return;
-    let live = true;
-    setSource(null);
-    setFailed('');
     setDuration(null);
     setTime(0);
-    window.media
-      .play(media)
-      .then((made) => {
-        if (!live) return;
-        setSource(made);
-        if (made.aspect) setAspect(made.aspect);
-      })
-      .catch((error: unknown) => {
-        if (live) {
-          setFailed(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => {
-      live = false;
-      void window.media.cancelPlay(media).catch(() => {});
-    };
-    // Once per file: a new object for the same file is the same file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaKey]);
+  useEffect(() => {
+    if (source?.aspect) setAspect(source.aspect);
+  }, [source]);
 
   // The track's width, for their frames, ruler and handles.
   useLayoutEffect(() => {
@@ -505,23 +479,11 @@ export function TrimEditor({
               / {duration ? clock(duration) : '–:––.––'}
             </span>
           </span>
-          <button
-            type="button"
-            aria-label={playing ? 'Pause' : 'Play'}
-            title={playing ? 'Pause (Space)' : 'Play (Space)'}
-            // A click doesn't keep focus here, so the keys stay the
-            // editor's (Tab still reaches it).
-            onMouseDown={(event) => event.preventDefault()}
+          <PlayButton
+            playing={playing}
             disabled={!source || !duration}
             onClick={toggle}
-            className="grid size-9 cursor-pointer place-items-center text-ink hover:opacity-70 disabled:cursor-default disabled:text-ink-faint disabled:hover:opacity-100"
-          >
-            {playing ? (
-              <Pause size={22} />
-            ) : (
-              <Play size={22} filled className="translate-x-px" />
-            )}
-          </button>
+          />
           {duration ? (
             <span className="justify-self-end text-ink-soft">
               {clock(start)} – {clock(end)}

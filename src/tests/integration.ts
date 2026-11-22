@@ -77,6 +77,15 @@ import { options as convertAudioOptions } from '../tools/audio/convert-audio/opt
 import compressVideo from '../tools/video/compress-video/handler';
 import muteVideo from '../tools/video/mute-video/handler';
 import trimVideo from '../tools/video/trim-video/handler';
+import resizeVideo from '../tools/video/resize-video/handler';
+import {
+  atHeight,
+  atWidth,
+  fitInside,
+  maxSide,
+  parseSize,
+  withinLimits,
+} from '../shared/frameSize';
 import { frameAt, waveform } from '../main/media';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
@@ -2165,6 +2174,198 @@ describe('tool queue', () => {
       for (const name of [...middle.outputs, ...rest.outputs]) {
         rmSync(path.join(outDir(), name));
       }
+    },
+  );
+
+  test('Resize Video fits a video inside a size, keeping its shape', () => {
+    assert.deepEqual(parseSize('1920 × 1080'), { width: 1920, height: 1080 });
+    assert.deepEqual(parseSize('640x360'), { width: 640, height: 360 });
+    assert.equal(parseSize('Custom'), null);
+    assert.equal(parseSize('0 × 10'), null);
+    const fit = (w: number, h: number, box: string) =>
+      fitInside({ width: w, height: h }, parseSize(box)!);
+    // The same shape: exactly the preset, either way.
+    assert.deepEqual(fit(1920, 1080, '1280 × 720'), {
+      width: 1280,
+      height: 720,
+    });
+    assert.deepEqual(fit(1280, 720, '3840 × 2160'), {
+      width: 3840,
+      height: 2160,
+    });
+    // Portrait and 4:3 fit by their height; nothing is ever odd.
+    assert.deepEqual(fit(1080, 1920, '1920 × 1080'), {
+      width: 608,
+      height: 1080,
+    });
+    assert.deepEqual(fit(1440, 1080, '1920 × 1080'), {
+      width: 1440,
+      height: 1080,
+    });
+    assert.deepEqual(fit(1080, 1920, '854 × 480'), { width: 270, height: 480 });
+    // One side typed, the other follows in the video's shape.
+    const phone = { width: 1080, height: 1920 };
+    assert.deepEqual(atWidth(phone, 720), { width: 720, height: 1280 });
+    assert.deepEqual(atHeight(phone, 1001), { width: 564, height: 1002 });
+    // Kept within what H.264 takes, still in shape.
+    assert.deepEqual(withinLimits(phone, { width: 3000, height: 5334 }), {
+      width: 2304,
+      height: maxSide,
+    });
+    assert.deepEqual(
+      withinLimits({ width: 1920, height: 1080 }, { width: 8, height: 4 }),
+      { width: 28, height: 16 },
+    );
+  });
+
+  test(
+    'Resize Video scales to the size shown, upright and in shape',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'resize');
+      await fs.mkdir(dir, { recursive: true });
+      /** A two-second test clip, with sound unless `silent`. */
+      const make = (name: string, size: string, silent = false) => {
+        const file = path.join(dir, name);
+        ffmpegOk([
+          '-f',
+          'lavfi',
+          '-i',
+          `testsrc=duration=2:size=${size}:rate=25`,
+          ...(silent
+            ? []
+            : ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2']),
+          '-c:v',
+          'mpeg4',
+          ...(silent ? [] : ['-c:a', 'aac', '-shortest']),
+          file,
+        ]);
+        return file;
+      };
+      const wide = make('wide.mp4', '1280x720');
+      const tall = make('tall.mp4', '720x1280');
+      const quiet = make('quiet.mp4', '640x480', true);
+      // Stored 1280×720 with a phone's 90° tag: seen as 720×1280.
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', wide, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** The output's video size and rotation tag, and its streams. */
+      const shapeOf = (file: string) => {
+        const probed = JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'stream=codec_type,codec_name,width,height:stream_side_data=rotation',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            width?: number;
+            height?: number;
+            side_data_list?: { rotation?: number }[];
+          }[];
+        };
+        const video = probed.streams.find((s) => s.codec_type === 'video');
+        return {
+          size: video ? `${video.width}x${video.height}` : null,
+          rotation: video?.side_data_list?.[0]?.rotation ?? 0,
+          streams: probed.streams.map((s) => `${s.codec_name},${s.codec_type}`),
+        };
+      };
+      const tools = queue({ 'resize-video': resizeVideo });
+      const made: string[] = [];
+      const resize = async (
+        file: string,
+        values: { size: string; width?: number; height?: number },
+      ) => {
+        const [job] = tools.run('resize-video', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return done;
+      };
+
+      // Down to a preset of the same shape: exactly it, H.264 and AAC.
+      const down = await resize(wide, { size: '640 × 360' });
+      assert.equal(down.status, 'done', down.error ?? '');
+      assert.deepEqual(down.outputs, ['wide-resized.mp4']);
+      assert.equal(down.note, undefined);
+      const small = shapeOf(path.join(outDir(), 'wide-resized.mp4'));
+      assert.equal(small.size, '640x360');
+      assert.deepEqual(small.streams, ['h264,video', 'aac,audio']);
+
+      // Portrait inside a landscape preset: fitted by its height.
+      const tallDone = await resize(tall, { size: '854 × 480' });
+      assert.equal(tallDone.status, 'done', tallDone.error ?? '');
+      assert.equal(
+        shapeOf(path.join(outDir(), tallDone.outputs[0])).size,
+        '270x480',
+      );
+
+      // A phone's sideways video comes out upright, with no tag left.
+      const upright = await resize(turned, { size: '640 × 360' });
+      assert.equal(upright.status, 'done', upright.error ?? '');
+      const uprightShape = shapeOf(path.join(outDir(), upright.outputs[0]));
+      assert.equal(uprightShape.size, '202x360');
+      assert.equal(uprightShape.rotation, 0);
+
+      // Custom, bigger than the video: upscaled, and said so.
+      const up = await resize(quiet, {
+        size: 'Custom',
+        width: 960,
+        height: 720,
+      });
+      assert.equal(up.status, 'done', up.error ?? '');
+      assert.match(up.note ?? '', /Upscaled from 640 × 480/);
+      const big = shapeOf(path.join(outDir(), up.outputs[0]));
+      assert.equal(big.size, '960x720');
+      // No sound in, none out.
+      assert.deepEqual(big.streams, ['h264,video']);
+
+      // Already that size: kept, and said so.
+      const same = await resize(wide, {
+        size: 'Custom',
+        width: 1280,
+        height: 720,
+      });
+      assert.equal(same.status, 'done', same.error ?? '');
+      assert.match(same.note ?? '', /already 1280 × 720/);
+
+      // Sizes it can't make, and a file with no video, fail with why.
+      const tiny = await resize(wide, { size: 'Custom', width: 8, height: 4 });
+      assert.equal(tiny.status, 'failed');
+      assert.match(tiny.error ?? '', /at least 16 px/);
+      const huge = await resize(wide, {
+        size: 'Custom',
+        width: 8000,
+        height: 4500,
+      });
+      assert.equal(huge.status, 'failed');
+      assert.match(huge.error ?? '', /at most 4096 px/);
+      const noVideo = await resize(sound, { size: '640 × 360' });
+      assert.equal(noVideo.status, 'failed');
+      assert.match(noVideo.error ?? '', /no video to resize/);
+
+      // The other tests here expect the output folder as they left it.
+      for (const name of made) rmSync(path.join(outDir(), name));
     },
   );
 

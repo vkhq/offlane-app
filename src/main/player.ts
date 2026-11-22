@@ -163,11 +163,17 @@ export class Player {
     const tools = this.deps.getFfmpeg();
     // Without ffprobe there is no telling; let Chromium try the file as is.
     if (!tools) {
-      return this.serve(id, file, 'direct', null, {
-        audioTracks: [],
-        audioTrack: 0,
-        subtitles: [],
-      });
+      return this.serve(
+        id,
+        file,
+        'direct',
+        { aspect: null, size: null },
+        {
+          audioTracks: [],
+          audioTrack: 0,
+          subtitles: [],
+        },
+      );
     }
 
     const info = await probe(tools.ffprobe, file);
@@ -196,6 +202,7 @@ export class Player {
       ),
     };
     const aspect = aspectOf(video[0]);
+    const shape = { aspect, size: sizeOf(video[0]) };
     const videoCodec = video[0]?.codec_name ?? null;
     const audioCodec = audio[chosen]?.codec_name ?? null;
     const videoOk = !videoCodec || playableVideo.has(videoCodec);
@@ -204,7 +211,7 @@ export class Player {
     // With several audio tracks, Chromium would play only the first: each
     // gets a copy of its own.
     if (videoOk && audioOk && audio.length <= 1 && containerOk(info, file)) {
-      return this.serve(id, file, 'direct', aspect, tracks);
+      return this.serve(id, file, 'direct', shape, tracks);
     }
 
     const remux = videoOk && audioOk;
@@ -219,7 +226,7 @@ export class Player {
     );
     const prepared = remux ? 'remux' : 'transcode';
     if (existsSync(output)) {
-      return this.serve(id, output, prepared, aspect, tracks);
+      return this.serve(id, output, prepared, shape, tracks);
     }
 
     const args = [
@@ -286,14 +293,14 @@ export class Player {
       );
     }
     await fs.rename(partial, output);
-    return this.serve(id, output, prepared, aspect, tracks);
+    return this.serve(id, output, prepared, shape, tracks);
   }
 
   private serve(
     id: string,
     file: string,
     prepared: PlaybackSource['prepared'],
-    aspect: number | null,
+    shape: Pick<PlaybackSource, 'aspect' | 'size'>,
     tracks: Pick<PlaybackSource, 'audioTracks' | 'audioTrack' | 'subtitles'>,
   ): PlaybackSource {
     this.served.set(id, file);
@@ -303,7 +310,7 @@ export class Player {
     return {
       url: `media://job/${id}?v=${version}`,
       prepared,
-      aspect,
+      ...shape,
       ...tracks,
     };
   }
@@ -465,6 +472,20 @@ function aspectOf(stream: Stream | undefined): number | null {
   return rotation === 90
     ? stream.height / stream.width
     : stream.width / stream.height;
+}
+
+/**
+ * A video stream's size in pixels as it plays, turned for a phone video
+ * stored on its side (1920×1080 with a 90° tag is 1080×1920).
+ */
+function sizeOf(
+  stream: Stream | undefined,
+): { width: number; height: number } | null {
+  if (!stream?.width || !stream.height) return null;
+  const rotation = Math.abs(stream.side_data_list?.[0]?.rotation ?? 0) % 180;
+  return rotation === 90
+    ? { width: stream.height, height: stream.width }
+    : { width: stream.width, height: stream.height };
 }
 
 /**

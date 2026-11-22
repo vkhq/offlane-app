@@ -430,3 +430,13 @@ export function timeRange(
     inputArgs: ['-ss', String(start), '-t', String(length)],
   };
 }
+
+// Picture sizes, as Resize Video's editor works them out too.
+export {
+  fitInside,
+  maxSide,
+  minSide,
+  parseSize,
+  sizeLabel,
+  type FrameSize,
+} from '../shared/frameSize';
