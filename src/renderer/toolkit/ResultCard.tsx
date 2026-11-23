@@ -65,7 +65,7 @@ export function ResultCard({
   const start = () => setPlaying(true);
 
   return (
-    <div className="flex items-center gap-4 overflow-hidden rounded-3xl bg-canvas pr-4 shadow-card [corner-shape:squircle]">
+    <div className="flex items-center gap-4 overflow-hidden rounded-3xl bg-canvas pr-4 shadow-card">
       {/* Flush with the card's edges; once it plays, pressing it plays it,
           with a play badge on hover. */}
       <button

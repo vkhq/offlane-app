@@ -216,7 +216,7 @@ export function FoundCard({
           corners are a squircle by corner-shape, not the squircle mask,
           which would stretch with a box that isn't square. */}
       <div className="drop-shadow-[0_12px_14px_rgb(0_0_0/0.16)]">
-        <div className="relative aspect-(--ratio) overflow-hidden rounded-[48px] bg-group [corner-shape:squircle]">
+        <div className="relative aspect-(--ratio) overflow-hidden rounded-[48px] bg-group">
           {thumbnail && (
             <div className="absolute inset-0 transition-transform duration-700 ease-out group-hover:scale-[1.04] motion-reduce:transition-none">
               <img
@@ -275,7 +275,7 @@ export function FoundCard({
           )}
 
           {/* A fine inner rim, so its edge stays crisp on any picture. */}
-          <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-white/12 ring-inset [corner-shape:squircle]" />
+          <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-white/12 ring-inset" />
         </div>
       </div>
       <Details id={detailsId} found={found} length={length} />

@@ -71,8 +71,9 @@
      rounded-xl (12px) for taller controls, fields and tiles, rounded-2xl
      (16px) for large surfaces such as cards, the drop zone and popups.
      Circles and pills stay rounded-full; a box nested in another takes the
-     outer radius less the gap between them. The home page's tool cards
-     are squircles instead (see the squircle utility). */
+     outer radius less the gap between them. Every other rounded corner is
+     a squircle (see corner-shape below). The home page's tool cards are
+     squircles by mask instead (see the squircle utility). */
 
   --shadow-float: 0 0 0 0.5px rgb(0 0 0 / 0.06), 0 2px 10px rgb(0 0 0 / 0.08);
   --shadow-popup: 0 0 0 0.5px rgb(0 0 0 / 0.18), 0 18px 50px rgb(0 0 0 / 0.22);
@@ -217,6 +218,24 @@
   border-radius: 9999px;
   border: 2px solid var(--color-link);
   background-color: var(--color-canvas);
+}
+
+/* Every rounded corner is a squircle: the radius eases into the sides as a
+   superellipse instead of a circular arc. Only boxes with a border-radius
+   change. Circles and pills stay round, as a squircle would square off a
+   dot or a pill's ends. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    corner-shape: squircle;
+  }
+
+  .rounded-full,
+  .flow-line,
+  .flow-joint {
+    corner-shape: round;
+  }
 }
 
 html,

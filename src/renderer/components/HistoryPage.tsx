@@ -295,7 +295,7 @@ function SessionRow({
           {thumbnail ? (
             <span
               style={{ '--ratio': whole ? aspect : 16 / 9 } as CSSProperties}
-              className="relative aspect-(--ratio) h-full overflow-hidden rounded-[14px] bg-group ring-1 ring-black/5 [corner-shape:squircle]"
+              className="relative aspect-(--ratio) h-full overflow-hidden rounded-[14px] bg-group ring-1 ring-black/5"
             >
               <img
                 src={thumbnail}
@@ -312,7 +312,7 @@ function SessionRow({
               {playlist ? <PlaylistBadge count={playlist} /> : null}
             </span>
           ) : (
-            <span className="relative grid size-full place-items-center rounded-2xl bg-group text-ink-faint ring-1 ring-black/5 [corner-shape:squircle]">
+            <span className="relative grid size-full place-items-center rounded-2xl bg-group text-ink-faint ring-1 ring-black/5">
               <Icon size={22} />
               {playlist ? <PlaylistBadge count={playlist} /> : null}
             </span>
