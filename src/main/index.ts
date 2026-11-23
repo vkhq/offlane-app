@@ -10,6 +10,7 @@ import {
   nativeTheme,
   net,
   protocol,
+  screen,
   session,
   systemPreferences,
 } from 'electron';
@@ -270,10 +271,18 @@ function allowMicrophoneOnly() {
 }
 
 const createWindow = (): void => {
+  // In development (`npm start`) the window opens maximized, filling the
+  // screen the pointer is on: created at that size, so it doesn't open small
+  // and then grow. A packaged app, and tests' hidden window, open at the
+  // fixed size.
+  const fill = !app.isPackaged && !hidden;
+  const bounds = fill
+    ? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+    : { width: 1220, height: 800 };
+
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    height: 800,
-    width: 1220,
+    ...bounds,
     minHeight: 560,
     minWidth: 940,
     // The page has no <title>, so this name stays: Window menu, Mission
@@ -306,6 +315,7 @@ const createWindow = (): void => {
     ...(hidden && { show: false, paintWhenInitiallyHidden: true }),
   });
   const window = mainWindow;
+  if (fill) window.maximize();
 
   // Cmd+W (Ctrl+W elsewhere) belongs to the page, which closes a tab or, with
   // only the pinned Home tab left, the app; so do Cmd+H, which shows Home,

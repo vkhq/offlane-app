@@ -21,7 +21,7 @@ import {
   withinLimits,
 } from '../../shared/frameSize';
 import { clock } from '../../shared/tools';
-import { LoaderCircle, X } from '../components/icons';
+import { LoaderCircle } from '../components/icons';
 import { PlayButton, useEditorVideo } from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
 
@@ -64,7 +64,9 @@ const cornerThickness = 5;
  * hit area (its ::before).
  */
 const handleShape = (handle: Handle) =>
-  handle.x && handle.y ? 'bg-transparent!' : 'rounded-full border-[2.5px] bg-white!';
+  handle.x && handle.y
+    ? 'bg-transparent!'
+    : 'rounded-full border-[2.5px] bg-white!';
 
 /**
  * A handle's size and place about its point on the frame: a pill centred on
@@ -133,7 +135,6 @@ export function ResizeEditor({
   values,
   onChange,
   locked,
-  onRemove,
   onHints,
 }: ToolEditorProps) {
   const video = useRef<HTMLVideoElement>(null);
@@ -195,7 +196,8 @@ export function ResizeEditor({
     return () => watch.disconnect();
   }, []);
 
-  // What each preset comes to for this video, beside it in the Size menu.
+  // What each preset comes to for this video, beside it in the Size menu,
+  // and which one is its own size.
   useEffect(() => {
     if (!original) return onHints({});
     const size: Record<string, string> = {};
@@ -204,6 +206,8 @@ export function ResizeEditor({
       const upscale = fitted.width > original.width;
       const label = sizeLabel(fitted);
       const parts = [
+        // The video's own size: kept as it is.
+        ...(preset === sourceKey ? ['original'] : []),
         ...(label === preset ? [] : [`→ ${label}`]),
         ...(upscale ? ['upscale'] : []),
       ];
@@ -472,17 +476,6 @@ export function ResizeEditor({
             )}
           </span>
         )}
-        {onRemove && !locked && (
-          <button
-            type="button"
-            aria-label="Remove video"
-            title="Remove"
-            onClick={onRemove}
-            className="absolute top-2.5 right-2.5 grid size-7 cursor-pointer place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm hover:bg-black/75"
-          >
-            <X size={14} strokeWidth={2.5} />
-          </button>
-        )}
       </div>
 
       {/* Under it: where it has played to, Play, and the size it makes. */}
@@ -511,9 +504,12 @@ export function ResizeEditor({
               <span
                 className={`font-medium ${upscale ? 'text-amber-700' : 'text-ink'}`}
               >
-                {percent}%
+                {sizeLabel(output)}
               </span>
-              <span className="text-ink-soft"> of {sizeLabel(original)}</span>
+              <span className="text-ink-soft">
+                {' '}
+                ({percent}% of {sizeLabel(original)})
+              </span>
               {upscale && (
                 <span className="block text-amber-700">
                   Upscaling: lower quality

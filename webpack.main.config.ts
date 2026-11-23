@@ -7,26 +7,42 @@ import { rules } from './webpack.rules';
 import { plugins } from './webpack.plugins';
 
 /**
- * In `npm start`, restarts the app once the main process is rebuilt, as
- * the page reloads once it is: Forge watches main but only restarts it on
- * `rs`. A build with errors leaves the running app as it is. The first
- * build is the one the app starts with, and a packaged build has only
- * that one.
+ * In `npm start`, restarts the app once the main process is rebuilt for a
+ * change to it, as the page updates once it is: Forge watches main but
+ * only restarts it on `rs`. A build with errors leaves the running app as
+ * it is. The first build is the one the app starts with, and a packaged
+ * build has only that one.
  *
- * Main must then be rebuilt only for a change to it: tsconfig.json
- * excludes .webpack, or the type checker, watching the project folder for
- * the root's *.ts, takes Forge's output landing there at startup for one
- * and the window closes and opens again.
+ * The type checker makes main rebuild for any file in the project, so a
+ * rebuild restarts the app only when one of main's own files changed;
+ * otherwise each edit to the page would close the window and open it
+ * again. tsconfig.json excludes .webpack too, or Forge's output landing
+ * there at startup would count as an edit.
  */
 class RestartOnRebuild {
   apply(compiler: Compiler) {
-    let first = true;
+    /** The files main is built from, as of its last build. */
+    let built: Set<string> | undefined;
     compiler.hooks.done.tap('RestartOnRebuild', (stats) => {
-      if (first) {
-        first = false;
-        return;
+      const before = built;
+      built = new Set(
+        [...stats.compilation.modules].flatMap((module) =>
+          'resource' in module && typeof module.resource === 'string'
+            ? [module.resource]
+            : [],
+        ),
+      );
+      if (!before || stats.hasErrors()) return;
+      // The type checker adds every file in tsconfig.json to main's watch,
+      // so an edit to the page rebuilds main too; restart only for a file
+      // main is built from (or was, for one deleted).
+      const touched = [
+        ...(compiler.modifiedFiles ?? []),
+        ...(compiler.removedFiles ?? []),
+      ];
+      if (touched.some((file) => built?.has(file) || before.has(file))) {
+        requestAppRestart();
       }
-      if (!stats.hasErrors()) requestAppRestart();
     });
   }
 }

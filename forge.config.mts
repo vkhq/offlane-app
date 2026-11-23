@@ -11,7 +11,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { brand } from './src/shared/brand';
 import { contentSecurityPolicy } from './src/shared/csp';
 import { mainConfig } from './webpack.main.config';
-import { rendererConfig } from './webpack.renderer.config';
+import { preloadConfig, rendererConfig } from './webpack.renderer.config';
 
 // Signing and notarizing run only when the credentials are in the
 // environment, so local builds stay unsigned.
@@ -86,8 +86,13 @@ const config: ForgeConfig = {
       devContentSecurityPolicy: `${contentSecurityPolicy}; connect-src 'self' ws://localhost:*`,
       // The router puts real paths in the URL, so reloading on one (or a
       // live reload) must get the page, which lives under its entry's name.
+      // Live reload is off: Forge serves the folder it writes the build to,
+      // so every file a rebuild rewrites would reload the page again. An
+      // edit React Fast Refresh can't take in place still reloads it (see
+      // webpack.renderer.config.ts).
       devServer: {
         historyApiFallback: { index: '/main_window/index.html' },
+        liveReload: false,
       },
       renderer: {
         config: rendererConfig,
@@ -98,6 +103,7 @@ const config: ForgeConfig = {
             name: 'main_window',
             preload: {
               js: './src/preload/index.ts',
+              config: preloadConfig,
             },
           },
         ],

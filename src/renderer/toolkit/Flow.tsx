@@ -19,9 +19,10 @@ import { smallButton } from './styles';
 
 /**
  * One step of the workflow: bare, on the canvas, with no card. A small
- * label row (icon, title, a line beside it, `beside` right after that,
- * such as a step's ✕, then `aside` on the right, such as Start Over) over
- * its content; with neither title nor aside, no row.
+ * label row on a white bar of its own, lifted like the cards (icon, title,
+ * a line beside it, `beside` right after that, such as a step's ✕, then
+ * `aside` on the right, such as Start Over) over its content; with neither
+ * title nor aside, no row.
  */
 export function FlowNode({
   icon: Icon,
@@ -50,7 +51,7 @@ export function FlowNode({
       className="flex w-full flex-col gap-1.5"
     >
       {(title || aside || beside) && (
-        <header className="flex h-7 items-center gap-2 pl-1">
+        <header className="flex h-9 items-center gap-2 rounded-xl bg-canvas pr-1.5 pl-3 shadow-card">
           {Icon && <Icon size={14} className="shrink-0 text-ink-faint" />}
           <h2 className="shrink-0 text-[12px] font-semibold text-ink-soft">
             {title}

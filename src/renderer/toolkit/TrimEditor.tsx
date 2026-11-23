@@ -13,7 +13,6 @@ import {
   ChevronLeft,
   ChevronRight,
   LoaderCircle,
-  X,
 } from '../components/icons';
 import { PlayButton, useEditorVideo } from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
@@ -68,7 +67,6 @@ export function TrimEditor({
   values,
   onChange,
   locked,
-  onRemove,
 }: ToolEditorProps) {
   const video = useRef<HTMLVideoElement>(null);
   const lane = useRef<HTMLDivElement>(null);
@@ -455,17 +453,6 @@ export function TrimEditor({
               </span>
             )}
           </span>
-        )}
-        {onRemove && !locked && (
-          <button
-            type="button"
-            aria-label="Remove video"
-            title="Remove"
-            onClick={onRemove}
-            className="absolute top-2.5 right-2.5 grid size-7 cursor-pointer place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm hover:bg-black/75"
-          >
-            <X size={14} strokeWidth={2.5} />
-          </button>
         )}
       </div>
 

@@ -58,8 +58,6 @@ export type ToolEditorProps = {
   onChange: (patch: Record<string, SettingValue>) => void;
   /** Run: shown as the record of what was done, not changed. */
   locked: boolean;
-  /** Takes the file out, back to the drop zone; none on a later step. */
-  onRemove?: () => void;
   /** Sets the words shown beside the options' choices (see OptionHints). */
   onHints: (hints: OptionHints) => void;
 };
@@ -238,12 +236,18 @@ export function standardTool<O extends Options>(
     // A tool with an editor shows it in place of its one file.
     const editing = Editor && typeof items[0] === 'object' ? items[0] : null;
     const media = useMediaRef(editing ?? undefined);
+    const startOverShown = ready || own.length > 0;
+    // An empty drop zone says what it wants itself, so its step has no
+    // label row until something is added (or Start Over has work to clear).
+    const bare = input.kind === 'drop' && count === 0 && !startOverShown;
 
     return (
       <ToolLayout tool={tool} wide={!!Editor}>
         <FlowNode
           icon={step.icon}
-          title={input.kind === 'link' ? input.label : step.title}
+          title={
+            bare ? undefined : input.kind === 'link' ? input.label : step.title
+          }
           detail={
             input.kind === 'drop' && count > 0
               ? editing
@@ -251,7 +255,7 @@ export function standardTool<O extends Options>(
                 : `${count} ${count === 1 ? 'item' : 'items'}`
               : undefined
           }
-          aside={(ready || own.length > 0) && <StartOver onClick={startOver} />}
+          aside={startOverShown && <StartOver onClick={startOver} />}
         >
           {input.kind === 'link' && (
             <LinkField
@@ -287,10 +291,6 @@ export function standardTool<O extends Options>(
                 }
               }}
               locked={locked}
-              onRemove={() => {
-                setItems([]);
-                setHints({});
-              }}
               onHints={setHints}
             />
           )}
