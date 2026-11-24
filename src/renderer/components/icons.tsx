@@ -376,6 +376,12 @@ export const Crop = makeIcon('Crop', {
   lines: 'M6.5 3v12.5a2 2 0 0 0 2 2H21M3 6.5h12.5a2 2 0 0 1 2 2V21',
 });
 
+/** A wide frame with a tall one inside it: a change of shape. */
+export const Ratio = makeIcon('Ratio', {
+  body: rect(3, 5.5, 18, 13, 3),
+  cut: 'M10 8.75h4a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1Z',
+});
+
 export const CircleArrowDown = makeIcon('CircleArrowDown', {
   body: circle(12, 12, 8.5),
   cut: 'M12 8v7.5m-3.25-3.25L12 15.5l3.25-3.25',
@@ -393,6 +399,10 @@ export const RefreshCw = makeIcon('RefreshCw', {
 
 export const RotateCw = makeIcon('RotateCw', {
   lines: 'M20 12a8 8 0 1 1-2.34-5.66L20 8.5M20 4v4.5h-4.5',
+});
+
+export const RotateCcw = makeIcon('RotateCcw', {
+  lines: 'M4 12a8 8 0 1 0 2.34-5.66L4 8.5M4 4v4.5h4.5',
 });
 
 export const Repeat = makeIcon('Repeat', {
@@ -434,6 +444,24 @@ export const FlipHorizontal2 = makeIcon('FlipHorizontal2', {
   body: 'M9 7.6V17H4.3a.75.75 0 0 1-.66-1.1l4.6-8.6a.4.4 0 0 1 .76.2Z',
   lines:
     'M15 7.6V17h4.7a.75.75 0 0 0 .66-1.1l-4.6-8.6a.4.4 0 0 0-.76.2ZM12 3v2m0 4v2m0 4v2m0 4v1',
+});
+
+/** Two halves mirrored across the middle, under a two-way arrow. */
+export const FlipSides = makeIcon('FlipSides', {
+  lines:
+    'M10.5 9.5V20H3.75ZM13.5 9.5V20h6.75ZM4 4.5h16M6 2.5l-2 2 2 2m12-4 2 2-2 2',
+});
+
+/** A square with an arrow curling back over it: a quarter turn left. */
+export const RotateSquareCcw = makeIcon('RotateSquareCcw', {
+  body: rect(3.5, 10, 11, 11, 2.25),
+  lines: 'M19 11V7.5A3.5 3.5 0 0 0 15.5 4h-3M15 1.5 12.5 4 15 6.5',
+});
+
+/** RotateSquareCcw mirrored: a quarter turn right. */
+export const RotateSquareCw = makeIcon('RotateSquareCw', {
+  body: rect(9.5, 10, 11, 11, 2.25),
+  lines: 'M5 11V7.5A3.5 3.5 0 0 1 8.5 4h3M9 1.5 11.5 4 9 6.5',
 });
 
 export const SquareSplitHorizontal = makeIcon('SquareSplitHorizontal', {

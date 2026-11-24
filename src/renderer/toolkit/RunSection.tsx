@@ -4,7 +4,7 @@ import {
   type OptionValues,
   type SettingValue,
   type ToolJob,
-  isShown,
+  inBar,
 } from '../../shared/tools';
 import { FlowLink, FlowNode, FlowNotice } from './Flow';
 import { JobResults } from './JobList';
@@ -75,7 +75,7 @@ export function RunSection<O extends Options>({
 }) {
   const { options, action } = config;
   const hasOptions = Object.keys(options).some((key) =>
-    isShown(options, key, values),
+    inBar(options, key, values),
   );
   const label =
     count !== undefined && kind ? countedAction(action, count, kind) : action;

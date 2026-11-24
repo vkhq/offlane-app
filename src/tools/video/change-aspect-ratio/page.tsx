@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import { dropVideos, standardTool } from '../../ui';
 import { options } from './options';
 
 export default standardTool({
   input: dropVideos(),
   options,
-  action: 'Apply',
+  action: 'Change Aspect Ratio',
 });

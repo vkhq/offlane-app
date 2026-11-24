@@ -64,7 +64,9 @@ import { type ToolHandler, ToolQueue } from '../main/tools/queue';
 import {
   clock,
   defineOptions,
+  editorValue,
   file,
+  inBar,
   isShown,
   parseClock,
   parseValues,
@@ -78,6 +80,7 @@ import compressVideo from '../tools/video/compress-video/handler';
 import muteVideo from '../tools/video/mute-video/handler';
 import trimVideo from '../tools/video/trim-video/handler';
 import resizeVideo from '../tools/video/resize-video/handler';
+import rotateVideo from '../tools/video/rotate-video/handler';
 import {
   atHeight,
   atWidth,
@@ -1687,6 +1690,51 @@ describe('tool queue', () => {
     }
   });
 
+  test("an editor's values reach the handler, out of the bar", async () => {
+    const options = defineOptions({
+      fit: select('Fit', ['Fill', 'Bars']),
+      left: editorValue('Left'),
+      width: editorValue('Width', 1920, { min: 16, max: 4096 }),
+      // Only applies while Fit is Fill.
+      x: shownWhen(editorValue('X', 50), 'fit', ['Fill']),
+    });
+    const values = { fit: 'Fill', left: 0, width: 1920, x: 50 };
+    // Never in the bar or the summary, whatever the choices.
+    assert.ok(inBar(options, 'fit', values));
+    for (const key of ['left', 'width', 'x']) {
+      assert.ok(!inBar(options, key, values), key);
+    }
+    // Kept although not in the bar: rounded to whole pixels, within range.
+    assert.deepEqual(
+      parseValues(options, { fit: 'Fill', left: 320.4, width: 640, x: 12 }),
+      { fit: 'Fill', left: 320, width: 640, x: 12 },
+    );
+    assert.deepEqual(
+      parseValues(options, { left: -5, width: 99999, x: 9000 }),
+      { fit: 'Fill', left: 0, width: 4096, x: 8192 },
+    );
+    // Not a number: its default.
+    assert.deepEqual(
+      parseValues(options, { left: '320', width: Number.NaN, x: null }),
+      { fit: 'Fill', left: 0, width: 1920, x: 50 },
+    );
+    // Its condition still holds: under Bars, X is its default.
+    assert.equal(parseValues(options, { fit: 'Bars', x: 12 }).x, 50);
+
+    // A run hands them to the handler as they were set.
+    const seen: unknown[] = [];
+    const tools = queue({
+      edit: { options, run: async ({ values }) => void seen.push(values) },
+    });
+    const [job] = tools.run('edit', {
+      files: [clip()],
+      links: [],
+      values: { fit: 'Fill', left: 320, width: 640, x: 12 },
+    });
+    await settled(tools, job.id);
+    assert.deepEqual(seen, [{ fit: 'Fill', left: 320, width: 640, x: 12 }]);
+  });
+
   test('a file option reaches the handler as a checked path', async () => {
     const options = defineOptions({
       mode: select('Mode', ['With File', 'Without']),
@@ -2365,6 +2413,184 @@ describe('tool queue', () => {
       assert.match(noVideo.error ?? '', /no video to resize/);
 
       // The other tests here expect the output folder as they left it.
+      for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test(
+    'Rotate Video turns and flips the picture as it is seen',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'rotate');
+      await fs.mkdir(dir, { recursive: true });
+      // 64×32, blue with its top-left quarter red, so where the red goes
+      // shows which way it was turned.
+      const marked = path.join(dir, 'marked.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=blue:s=64x32:d=1:r=25,drawbox=x=0:y=0:w=32:h=16:c=red:t=fill',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:v',
+        'mpeg4',
+        '-q:v',
+        '2',
+        '-c:a',
+        'aac',
+        '-shortest',
+        marked,
+      ]);
+      // The same, stored with a phone's 90° tag: seen as 32×64.
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', marked, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** The output's size, rotation tag, streams, and which corner is red
+       *  (its first frame, as it is seen). */
+      const look = (file: string) => {
+        const probed = JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'stream=codec_type,codec_name,width,height:stream_side_data=rotation',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            width?: number;
+            height?: number;
+            side_data_list?: { rotation?: number }[];
+          }[];
+        };
+        const video = probed.streams.find((s) => s.codec_type === 'video');
+        const pixels = ffmpegOk([
+          '-i',
+          file,
+          '-frames:v',
+          '1',
+          '-vf',
+          // In RGB first: shrunk in 4:2:0, the colours bleed together.
+          'format=rgb24,scale=2:2:flags=area',
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'rgb24',
+          'pipe:1',
+        ]);
+        const corners = [
+          'top left',
+          'top right',
+          'bottom left',
+          'bottom right',
+        ];
+        const red = corners.filter((_, i) => pixels[i * 3] > pixels[i * 3 + 2]);
+        return {
+          size: video ? `${video.width}x${video.height}` : null,
+          rotation: video?.side_data_list?.[0]?.rotation ?? 0,
+          streams: probed.streams.map((s) => `${s.codec_name},${s.codec_type}`),
+          red: red.join(', '),
+        };
+      };
+
+      const tools = queue({ 'rotate-video': rotateVideo });
+      const made: string[] = [];
+      const rotate = async (
+        file: string,
+        values: { rotate: string; flipHorizontally: boolean },
+      ) => {
+        const [job] = tools.run('rotate-video', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return {
+          ...done,
+          look: done.outputs[0]
+            ? look(path.join(outDir(), done.outputs[0]))
+            : null,
+        };
+      };
+
+      assert.equal(look(marked).red, 'top left');
+
+      // 90° Right: the top left goes to the top right; H.264 and AAC.
+      const right = await rotate(marked, {
+        rotate: '90° Right',
+        flipHorizontally: false,
+      });
+      assert.equal(right.status, 'done', right.error ?? '');
+      assert.deepEqual(right.outputs, ['marked-rotated.mp4']);
+      assert.deepEqual(right.look, {
+        size: '32x64',
+        rotation: 0,
+        streams: ['h264,video', 'aac,audio'],
+        red: 'top right',
+      });
+
+      const cases: [string, boolean, string, string][] = [
+        ['90° Left', false, '32x64', 'bottom left'],
+        ['180°', false, '64x32', 'bottom right'],
+        ['None', true, '64x32', 'top right'],
+        // Turned right, then mirrored: back to the left.
+        ['90° Right', true, '32x64', 'top left'],
+      ];
+      for (const [turn, flip, size, red] of cases) {
+        const done = await rotate(marked, {
+          rotate: turn,
+          flipHorizontally: flip,
+        });
+        assert.equal(done.status, 'done', done.error ?? '');
+        assert.equal(done.look?.size, size, `${turn}, flip ${flip}`);
+        assert.equal(done.look?.red, red, `${turn}, flip ${flip}`);
+      }
+
+      // A phone's sideways video is turned from how it plays (its 90° tag
+      // turns it left, so red at the bottom left), and comes out with no
+      // tag for a player to ignore.
+      assert.equal(look(turned).red, 'bottom left');
+      const upright = await rotate(turned, {
+        rotate: '90° Right',
+        flipHorizontally: false,
+      });
+      assert.equal(upright.status, 'done', upright.error ?? '');
+      assert.equal(upright.look?.size, '64x32');
+      assert.equal(upright.look?.rotation, 0);
+      assert.equal(upright.look?.red, 'top left');
+
+      // Nothing to do, or no video, fails with why.
+      const nothing = await rotate(marked, {
+        rotate: 'None',
+        flipHorizontally: false,
+      });
+      assert.equal(nothing.status, 'failed');
+      assert.match(nothing.error ?? '', /Nothing to change/);
+      const noVideo = await rotate(sound, {
+        rotate: '90° Right',
+        flipHorizontally: false,
+      });
+      assert.equal(noVideo.status, 'failed');
+      assert.match(noVideo.error ?? '', /no video to rotate/);
+
       for (const name of made) rmSync(path.join(outDir(), name));
     },
   );

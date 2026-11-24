@@ -54,7 +54,11 @@ page and when it is used as a later step, so never rebuild any of it:
   Video's sets Start and End on a timeline of the video's frames
   (`TrimEditor`); an editor gets the file as a `MediaRef` and plays it,
   and asks for its frames (or a waveform), through `window.media`. A tool
-  with an editor gets a wider column.
+  with an editor gets a wider column. A value only the editor sets (a crop box's edges) is an
+  `editorValue('Left', 0)` option: whole pixels of the picture as it plays,
+  sent to the handler but never in the options bar or the summary. The
+  handler keeps it within the picture, as the file may not be the one it
+  was set on.
 - **Options:** a "<Tool> Options" chip on the link to them, the menu bar of
   options, and the button, counting what it runs on ("Mute 2 Videos"); kept
   as a read-only record once run (`RunSection`).

@@ -9,11 +9,7 @@ import {
 
 import { clock } from '../../shared/tools';
 import type { MediaRef } from '../../shared/types';
-import {
-  ChevronLeft,
-  ChevronRight,
-  LoaderCircle,
-} from '../components/icons';
+import { ChevronLeft, ChevronRight, LoaderCircle } from '../components/icons';
 import { PlayButton, useEditorVideo } from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
 

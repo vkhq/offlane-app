@@ -54,6 +54,7 @@ const pasts: Record<string, string> = {
   Compress: 'Compressed',
   Convert: 'Converted',
   Create: 'created',
+  Crop: 'Cropped',
   Delete: 'deleted',
   Export: 'Exported',
   Extract: 'Extracted',

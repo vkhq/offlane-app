@@ -6,7 +6,7 @@ import {
   type Setting,
   type SettingValue,
   clock,
-  isShown,
+  inBar,
   parseClock,
 } from '../../shared/tools';
 import { ArrowRight, ChevronDown } from '../components/icons';
@@ -52,7 +52,7 @@ export function OptionsBar<O extends Options>({
 }) {
   // Only the options the choices made so far call for.
   const entries = Object.entries(options).filter(([key]) =>
-    isShown(options, key, values),
+    inBar(options, key, values),
   );
 
   return (
@@ -98,7 +98,7 @@ export function summarizeOptions<O extends Options>(
   values: OptionValues<O>,
 ) {
   return Object.entries(options)
-    .filter(([key]) => isShown(options, key, values))
+    .filter(([key]) => inBar(options, key, values))
     .map(([key, setting]) => summarize(setting, values[key]))
     .filter((part): part is string => Boolean(part));
 }

@@ -20,9 +20,13 @@ import {
   sizeLabel,
   withinLimits,
 } from '../../shared/frameSize';
-import { clock } from '../../shared/tools';
-import { LoaderCircle } from '../components/icons';
-import { PlayButton, useEditorVideo } from './editorVideo';
+import {
+  PlayButton,
+  PlayClock,
+  VideoWaiting,
+  useEditorPlayback,
+  useEditorVideo,
+} from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
 
 /** Room kept around the frame on the stage, for its handles, in px. */
@@ -137,15 +141,11 @@ export function ResizeEditor({
   locked,
   onHints,
 }: ToolEditorProps) {
-  const video = useRef<HTMLVideoElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const { source, failed, mediaKey } = useEditorVideo(media);
-  /** The video's size from the element, if the player didn't say. */
-  const [shown, setShown] = useState<FrameSize | null>(null);
+  const { shown, time, duration, playing, toggle, videoProps } =
+    useEditorPlayback(mediaKey);
   const [room, setRoom] = useState({ width: 0, height: 0 });
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState<number | null>(null);
-  const [playing, setPlaying] = useState(false);
   /** The stage's scale while a handle is held, so the frame follows the
    *  pointer rather than the stage rescaling under it. */
   const [held, setHeld] = useState<number | null>(null);
@@ -175,14 +175,6 @@ export function ResizeEditor({
       : fitInside(original, parseSize(choice) ?? original);
   const tooBig = !!output && Math.max(output.width, output.height) > maxSide;
   const tooSmall = !!output && Math.min(output.width, output.height) < minSide;
-
-  // A new file starts from its beginning.
-  useEffect(() => {
-    setShown(null);
-    setDuration(null);
-    setTime(0);
-    setPlaying(false);
-  }, [mediaKey]);
 
   // The stage's size, for the frame's scale.
   useLayoutEffect(() => {
@@ -254,28 +246,6 @@ export function ResizeEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [choice, typed.width, typed.height, sourceKey, locked]);
-
-  // The playhead's time while it plays.
-  useEffect(() => {
-    if (!playing) return;
-    let frame = 0;
-    const tick = () => {
-      const element = video.current;
-      if (!element) return;
-      setTime(element.currentTime);
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [playing]);
-
-  const toggle = () => {
-    const element = video.current;
-    if (!element || !duration) return;
-    if (!element.paused) return element.pause();
-    if (element.currentTime >= duration - 0.05) element.currentTime = 0;
-    void element.play().catch(() => {});
-  };
 
   // Screen pixels per video pixel: the video at `restShare` of the stage,
   // or less if the frame wouldn't fit; held while a handle is dragged.
@@ -413,27 +383,10 @@ export function ResizeEditor({
             }
           >
             <video
-              ref={video}
+              {...videoProps}
               src={source.url}
               preload="auto"
               playsInline
-              onClick={toggle}
-              onLoadedMetadata={(event) => {
-                const element = event.currentTarget;
-                if (Number.isFinite(element.duration)) {
-                  setDuration(element.duration);
-                }
-                if (element.videoWidth && element.videoHeight) {
-                  setShown({
-                    width: element.videoWidth,
-                    height: element.videoHeight,
-                  });
-                }
-              }}
-              onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
               className="size-full cursor-pointer rounded-[10px] object-fill"
             />
             {box && output && (
@@ -464,29 +417,12 @@ export function ResizeEditor({
             )}
           </div>
         )}
-        {!source && (
-          <span className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-ink-soft">
-            {failed ? (
-              failed
-            ) : (
-              <span className="flex items-center gap-2">
-                <LoaderCircle size={14} className="animate-spin" />
-                Getting the video ready…
-              </span>
-            )}
-          </span>
-        )}
+        {!source && <VideoWaiting failed={failed} />}
       </div>
 
       {/* Under it: where it has played to, Play, and the size it makes. */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center rounded-2xl bg-canvas px-4 py-1.5 text-[12px] tabular-nums shadow-card">
-        <span>
-          <span className="font-semibold">{clock(time)}</span>
-          <span className="text-ink-faint">
-            {' '}
-            / {duration ? clock(duration) : '–:––.––'}
-          </span>
-        </span>
+        <PlayClock time={time} duration={duration} />
         <PlayButton
           playing={playing}
           disabled={!source || !duration}

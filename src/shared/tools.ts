@@ -42,6 +42,21 @@ export type PasswordSetting = {
 };
 export type FileSetting = { kind: 'file'; label: string; accept: string };
 export type InfoSetting = { kind: 'info'; label: string; value: string };
+/**
+ * A whole number a tool's editor sets on the file, in pixels of the
+ * picture as it plays (a crop box's edge): sent to the handler, but never
+ * shown in the options bar or the summary, and not reset for being out of
+ * the bar. Kept within `min` and `max`; the handler still keeps it within
+ * the picture, as the file may not be the one it was set on.
+ */
+export type EditorSetting = {
+  kind: 'editor';
+  /** What it is, for anyone reading the code or a saved tab. */
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+};
 
 export type Setting = (
   | SelectSetting
@@ -52,6 +67,7 @@ export type Setting = (
   | PasswordSetting
   | FileSetting
   | InfoSetting
+  | EditorSetting
 ) & { when?: Condition };
 
 export type SettingValue = string | number | boolean;
@@ -61,7 +77,7 @@ export type Options = Record<string, Setting>;
 
 type ValueOf<S extends Setting> = S extends ToggleSetting
   ? boolean
-  : S extends NumberSetting | SliderSetting
+  : S extends NumberSetting | SliderSetting | EditorSetting
     ? number
     : string;
 
@@ -96,6 +112,16 @@ export function isShown(
   return !when || when.is.includes(values[when.option] as SettingValue);
 }
 
+/**
+ * Whether option `key` is one the options bar and the summary show: shown
+ * (see `isShown`), and not one an editor sets.
+ */
+export const inBar = (
+  options: Options,
+  key: string,
+  values: Record<string, unknown>,
+) => options[key]?.kind !== 'editor' && isShown(options, key, values);
+
 /** `setting`, shown only while option `option` is one of `is`. */
 export const shownWhen = <S extends Setting>(
   setting: S,
@@ -106,8 +132,9 @@ export const shownWhen = <S extends Setting>(
 /**
  * Checks values sent from the page against the options, treating them as
  * untrusted: unknown keys are dropped, a missing or wrong-typed value falls
- * back to the option's default, a select only takes one of its options, and
- * a hidden option (see `Condition`) keeps its default.
+ * back to the option's default, a select only takes one of its options, an
+ * editor's value is rounded and kept within its range, and a hidden option
+ * (see `Condition`) keeps its default.
  */
 export function parseValues<O extends Options>(
   options: O,
@@ -132,6 +159,14 @@ export function parseValues<O extends Options>(
       case 'select':
         if (typeof value === 'string' && setting.options.includes(value))
           values[key] = value;
+        break;
+      case 'editor':
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          values[key] = Math.min(
+            setting.max,
+            Math.max(setting.min, Math.round(value)),
+          );
+        }
         break;
       case 'info':
         // Fixed text, never chosen.
@@ -161,6 +196,16 @@ export const toggle = (label: string, value = false): ToggleSetting => ({
   label,
   value,
 });
+
+/**
+ * A number of pixels a tool's editor sets (see `EditorSetting`), from
+ * `value`, kept within 0 and 8192 unless told otherwise.
+ */
+export const editorValue = (
+  label: string,
+  value = 0,
+  { min = 0, max = 8192 }: { min?: number; max?: number } = {},
+): EditorSetting => ({ kind: 'editor', label, value, min, max });
 
 export const info = (label: string, value: string): InfoSetting => ({
   kind: 'info',
