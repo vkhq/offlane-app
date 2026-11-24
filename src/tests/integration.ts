@@ -82,6 +82,8 @@ import trimVideo from '../tools/video/trim-video/handler';
 import resizeVideo from '../tools/video/resize-video/handler';
 import rotateVideo from '../tools/video/rotate-video/handler';
 import changeAspectRatio from '../tools/video/change-aspect-ratio/handler';
+import cropVideo from '../tools/video/crop-video/handler';
+import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
 import {
   aspectPlan,
   barsOf,
@@ -2906,6 +2908,303 @@ describe('tool queue', () => {
       assert.match(huge.error ?? '', /at most 4096 px/);
       const noVideo = await reshape(sound, { aspect: '1:1 Square' });
       assert.match(noVideo.error ?? '', /no video to reshape/);
+
+      for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test('Crop Video works out the box', () => {
+    const source = { width: 1280, height: 720 };
+    const whole = { x: 0, y: 0, width: 1280, height: 720 };
+    // 0 is the whole picture; a box is kept inside, even, at least 16.
+    assert.deepEqual(
+      boxOf(source, { left: 0, top: 0, width: 0, height: 0 }),
+      whole,
+    );
+    assert.ok(isWhole(source, whole));
+    assert.deepEqual(
+      boxOf(source, { left: 101, top: 51, width: 641, height: 361 }),
+      {
+        x: 100,
+        y: 50,
+        width: 640,
+        height: 360,
+      },
+    );
+    assert.deepEqual(
+      boxOf(source, { left: 1200, top: 700, width: 640, height: 4 }),
+      {
+        x: 640,
+        y: 700,
+        width: 640,
+        height: 16,
+      },
+    );
+    const box = { x: 100, y: 100, width: 400, height: 200 };
+    // Moved whole, kept inside.
+    assert.deepEqual(dragBox(source, box, 'move', 50, -500), {
+      ...box,
+      x: 150,
+      y: 0,
+    });
+    // A corner moves its edges; the opposite ones stay put.
+    assert.deepEqual(dragBox(source, box, { x: -1, y: -1 }, -40, 20), {
+      x: 60,
+      y: 120,
+      width: 440,
+      height: 180,
+    });
+    assert.deepEqual(dragBox(source, box, { x: 1, y: 0 }, 2000, 0), {
+      ...box,
+      width: 1180,
+    });
+    // Never smaller than 16.
+    assert.deepEqual(dragBox(source, box, { x: 1, y: 1 }, -1000, -1000), {
+      ...box,
+      width: 16,
+      height: 16,
+    });
+    // Held to 1:1: a corner follows the further way; a side grows the
+    // other way about the centre.
+    const square = { width: 1, height: 1 };
+    assert.deepEqual(
+      dragBox(source, { ...box, height: 400 }, { x: 1, y: 1 }, 100, 20, square),
+      {
+        x: 100,
+        y: 100,
+        width: 500,
+        height: 500,
+      },
+    );
+    assert.deepEqual(
+      dragBox(
+        source,
+        { x: 400, y: 200, width: 200, height: 200 },
+        { x: 1, y: 0 },
+        100,
+        0,
+        square,
+      ),
+      {
+        x: 400,
+        y: 150,
+        width: 300,
+        height: 300,
+      },
+    );
+    // As tall as fits about its centre, at most (300 from the top).
+    assert.deepEqual(
+      dragBox(
+        source,
+        { x: 400, y: 200, width: 200, height: 200 },
+        { x: 1, y: 0 },
+        1000,
+        0,
+        square,
+      ),
+      {
+        x: 400,
+        y: 0,
+        width: 600,
+        height: 600,
+      },
+    );
+    // Shrinking by a corner follows the further way too (left, not up).
+    assert.deepEqual(
+      dragBox(
+        source,
+        { x: 400, y: 0, width: 720, height: 720 },
+        { x: 1, y: 1 },
+        -300,
+        -60,
+        square,
+      ),
+      { x: 400, y: 0, width: 420, height: 420 },
+    );
+    // A shape chosen: its largest box, where the box was.
+    assert.deepEqual(shapeBox(source, whole, { width: 9, height: 16 }), {
+      x: 436,
+      y: 0,
+      width: 406,
+      height: 720,
+    });
+    assert.deepEqual(
+      shapeBox(source, { x: 0, y: 0, width: 100, height: 100 }, square),
+      {
+        x: 0,
+        y: 0,
+        width: 720,
+        height: 720,
+      },
+    );
+  });
+
+  test(
+    'Crop Video keeps the box, unscaled',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'crop');
+      await fs.mkdir(dir, { recursive: true });
+      // 1280×720, green with a red left edge (160 px) and a blue right one.
+      const edged = path.join(dir, 'edged.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=green:s=1280x720:d=1:r=25,drawbox=x=0:y=0:w=160:h=ih:c=red:t=fill,drawbox=x=1120:y=0:w=160:h=ih:c=blue:t=fill',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:v',
+        'mpeg4',
+        '-q:v',
+        '2',
+        '-c:a',
+        'aac',
+        '-shortest',
+        edged,
+      ]);
+      const silent = path.join(dir, 'silent.mp4');
+      ffmpegOk(['-i', edged, '-an', '-c', 'copy', silent]);
+      // Stored 1280×720 with a phone's 90° tag: seen as 720×1280, its red
+      // edge at the bottom.
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', edged, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** Its size, tag, streams, and its first frame's colour. */
+      const look = (file: string) => {
+        const probed = JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'stream=codec_type,codec_name,width,height:stream_side_data=rotation',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            width?: number;
+            height?: number;
+            side_data_list?: { rotation?: number }[];
+          }[];
+        };
+        const video = probed.streams.find((s) => s.codec_type === 'video');
+        const [r, g, b] = ffmpegOk([
+          '-i',
+          file,
+          '-frames:v',
+          '1',
+          '-vf',
+          'format=rgb24,scale=1:1:flags=area',
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'rgb24',
+          'pipe:1',
+        ]);
+        return {
+          size: video ? `${video.width}x${video.height}` : null,
+          rotation: video?.side_data_list?.[0]?.rotation ?? 0,
+          streams: probed.streams.map((s) => `${s.codec_name},${s.codec_type}`),
+          colour: r > g && r > b ? 'red' : b > g ? 'blue' : 'green',
+        };
+      };
+
+      const tools = queue({ 'crop-video': cropVideo });
+      const made: string[] = [];
+      const crop = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('crop-video', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return {
+          ...done,
+          look: done.outputs[0]
+            ? look(path.join(outDir(), done.outputs[0]))
+            : null,
+        };
+      };
+
+      // The red edge: exactly the box, H.264 and AAC.
+      const left = await crop(edged, {
+        left: 0,
+        top: 100,
+        width: 160,
+        height: 300,
+      });
+      assert.equal(left.status, 'done', left.error ?? '');
+      assert.deepEqual(left.outputs, ['edged-cropped.mp4']);
+      assert.deepEqual(left.look, {
+        size: '160x300',
+        rotation: 0,
+        streams: ['h264,video', 'aac,audio'],
+        colour: 'red',
+      });
+      // The blue edge; a box past the picture is brought inside it.
+      const right = await crop(edged, {
+        left: 5000,
+        top: 5000,
+        width: 120,
+        height: 120,
+      });
+      assert.equal(right.status, 'done', right.error ?? '');
+      assert.equal(right.look?.size, '120x120');
+      assert.equal(right.look?.colour, 'blue');
+      // The middle, with no sound in or out.
+      const middle = await crop(silent, {
+        left: 400,
+        top: 200,
+        width: 480,
+        height: 320,
+      });
+      assert.deepEqual(middle.look?.streams, ['h264,video']);
+      assert.equal(middle.look?.colour, 'green');
+      // A phone's sideways video is cropped as it plays: its bottom is red.
+      const bottom = await crop(turned, {
+        left: 0,
+        top: 1120,
+        width: 720,
+        height: 160,
+      });
+      assert.equal(bottom.status, 'done', bottom.error ?? '');
+      assert.deepEqual(
+        {
+          size: bottom.look?.size,
+          rotation: bottom.look?.rotation,
+          colour: bottom.look?.colour,
+        },
+        { size: '720x160', rotation: 0, colour: 'red' },
+      );
+
+      // The whole picture (the default), or no video, fails with why.
+      const nothing = await crop(edged, {});
+      assert.equal(nothing.status, 'failed');
+      assert.match(nothing.error ?? '', /Drag the box's edges/);
+      const noVideo = await crop(sound, {
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+      });
+      assert.match(noVideo.error ?? '', /no video to crop/);
 
       for (const name of made) rmSync(path.join(outDir(), name));
     },

@@ -431,6 +431,9 @@ export function timeRange(
   };
 }
 
+// The box Crop Video keeps, as its editor works it out too.
+export { boxOf, isWhole, minCrop } from '../shared/cropBox';
+
 // Picture shapes, as Change Aspect Ratio's editor works them out too.
 export {
   aspectPlan,
