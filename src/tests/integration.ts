@@ -83,6 +83,8 @@ import resizeVideo from '../tools/video/resize-video/handler';
 import rotateVideo from '../tools/video/rotate-video/handler';
 import changeAspectRatio from '../tools/video/change-aspect-ratio/handler';
 import cropVideo from '../tools/video/crop-video/handler';
+import changeSpeed from '../tools/video/change-speed/handler';
+import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
 import {
   aspectPlan,
@@ -3205,6 +3207,184 @@ describe('tool queue', () => {
         height: 100,
       });
       assert.match(noVideo.error ?? '', /no video to crop/);
+
+      for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test('Change Speed works out lengths and sound steps', () => {
+    assert.equal(parseSpeed('1.25×'), 1.25);
+    assert.equal(parseSpeed('4x'), 4);
+    assert.equal(parseSpeed('5×'), null);
+    assert.equal(parseSpeed('fast'), null);
+    assert.equal(lengthAt(8, 2), 4);
+    assert.deepEqual(tempoSteps(2), ['atempo=2']);
+    assert.deepEqual(tempoSteps(4), ['atempo=2', 'atempo=2']);
+    assert.deepEqual(tempoSteps(3), ['atempo=2', 'atempo=1.5']);
+    assert.deepEqual(tempoSteps(0.25), ['atempo=0.5', 'atempo=0.5']);
+    assert.deepEqual(tempoSteps(0.75), ['atempo=0.75']);
+  });
+
+  test(
+    'Change Speed plays a video faster or slower, pitch kept',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'speed');
+      await fs.mkdir(dir, { recursive: true });
+      // Four seconds at 25 fps, with a tone.
+      const clip = path.join(dir, 'clip.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=320x240:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=4',
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-shortest',
+        clip,
+      ]);
+      const silent = path.join(dir, 'silent.mp4');
+      ffmpegOk(['-i', clip, '-an', '-c', 'copy', silent]);
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', clip, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** Each stream's codec, length and (video) size and frame rate. */
+      const streamsOf = (file: string) =>
+        (
+          JSON.parse(
+            spawnSync(vendorFfprobe, [
+              '-v',
+              'error',
+              '-show_entries',
+              'stream=codec_type,codec_name,duration,width,height,avg_frame_rate:stream_side_data=rotation',
+              '-of',
+              'json',
+              file,
+            ]).stdout.toString(),
+          ) as {
+            streams: {
+              codec_type: string;
+              codec_name: string;
+              duration: string;
+              width?: number;
+              height?: number;
+              avg_frame_rate: string;
+              side_data_list?: { rotation?: number }[];
+            }[];
+          }
+        ).streams;
+      const fps = (rate: string) => {
+        const [top, bottom] = rate.split('/').map(Number);
+        return top / bottom;
+      };
+
+      const tools = queue({ 'change-speed': changeSpeed });
+      const made: string[] = [];
+      const change = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('change-speed', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return {
+          ...done,
+          streams: done.outputs[0]
+            ? streamsOf(path.join(outDir(), done.outputs[0]))
+            : [],
+        };
+      };
+
+      // 2×: half as long, picture and sound alike, at the same frame rate.
+      const fast = await change(clip, { speed: '2×' });
+      assert.equal(fast.status, 'done', fast.error ?? '');
+      assert.deepEqual(fast.outputs, ['clip-2x.mp4']);
+      const [fastVideo, fastAudio] = fast.streams;
+      assert.deepEqual(
+        [fastVideo.codec_name, fastAudio.codec_name],
+        ['h264', 'aac'],
+      );
+      assert.ok(
+        Math.abs(Number(fastVideo.duration) - 2) < 0.1,
+        fastVideo.duration,
+      );
+      assert.ok(
+        Math.abs(Number(fastAudio.duration) - 2) < 0.1,
+        fastAudio.duration,
+      );
+      assert.ok(
+        Math.abs(fps(fastVideo.avg_frame_rate) - 25) < 0.5,
+        fastVideo.avg_frame_rate,
+      );
+
+      // 4×: a quarter as long, still 25 fps, not 100.
+      const fastest = await change(clip, { speed: '4×' });
+      assert.ok(Math.abs(Number(fastest.streams[0].duration) - 1) < 0.1);
+      assert.ok(
+        fps(fastest.streams[0].avg_frame_rate) <= 25.5,
+        fastest.streams[0].avg_frame_rate,
+      );
+
+      // 0.5× and 0.25×: twice and four times as long, sound too.
+      const slow = await change(clip, { speed: '0.5×' });
+      assert.deepEqual(slow.outputs, ['clip-0.5x.mp4']);
+      for (const stream of slow.streams) {
+        assert.ok(
+          Math.abs(Number(stream.duration) - 8) < 0.15,
+          stream.duration,
+        );
+      }
+      const slowest = await change(clip, { speed: '0.25×' });
+      for (const stream of slowest.streams) {
+        assert.ok(
+          Math.abs(Number(stream.duration) - 16) < 0.2,
+          stream.duration,
+        );
+      }
+
+      // Remove Audio: no sound out.
+      const quiet = await change(clip, { speed: '1.5×', removeAudio: true });
+      assert.equal(quiet.status, 'done', quiet.error ?? '');
+      assert.deepEqual(
+        quiet.streams.map((s) => s.codec_type),
+        ['video'],
+      );
+      // No sound in, none out.
+      const none = await change(silent, { speed: '2×' });
+      assert.equal(none.status, 'done', none.error ?? '');
+      assert.deepEqual(
+        none.streams.map((s) => s.codec_type),
+        ['video'],
+      );
+      // A phone's sideways video comes out upright, with no tag.
+      const upright = await change(turned, { speed: '2×' });
+      assert.equal(upright.streams[0].width, 240);
+      assert.equal(upright.streams[0].height, 320);
+      assert.equal(upright.streams[0].side_data_list?.[0]?.rotation ?? 0, 0);
+
+      // 1×, or no video, fails with why.
+      const same = await change(clip, { speed: '1×' });
+      assert.equal(same.status, 'failed');
+      assert.match(same.error ?? '', /other than 1×/);
+      const noVideo = await change(sound, { speed: '2×' });
+      assert.match(noVideo.error ?? '', /no video to speed up/);
 
       for (const name of made) rmSync(path.join(outDir(), name));
     },

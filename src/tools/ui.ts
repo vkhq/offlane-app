@@ -47,6 +47,7 @@ export { ResizeEditor } from '../renderer/toolkit/ResizeEditor';
 export { RotateEditor } from '../renderer/toolkit/RotateEditor';
 export { AspectEditor } from '../renderer/toolkit/AspectEditor';
 export { CropEditor } from '../renderer/toolkit/CropEditor';
+export { SpeedEditor } from '../renderer/toolkit/SpeedEditor';
 export {
   defineTool,
   type Tool,
