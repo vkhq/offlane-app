@@ -45,6 +45,7 @@ export {
 export { TrimEditor } from '../renderer/toolkit/TrimEditor';
 export { ResizeEditor } from '../renderer/toolkit/ResizeEditor';
 export { RotateEditor } from '../renderer/toolkit/RotateEditor';
+export { AspectEditor } from '../renderer/toolkit/AspectEditor';
 export {
   defineTool,
   type Tool,

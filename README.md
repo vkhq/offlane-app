@@ -33,14 +33,14 @@ Offlane brings nearly forty small tools together in one window: compress a video
 
 ## Tools
 
-| Group  | Tools                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Video  | **Compress Video** ✓, Convert, Trim, **Resize Video** ✓, Crop, **Rotate Video** ✓, Change Aspect Ratio, Change Speed, Merge, Mute, Replace Audio, Burn In Subtitles, Video to GIF |
-| Audio  | Convert, Trim, Clean Up, Record, Extract Audio                                                                                                                                    |
-| Images | Compress, Convert, Resize, Rotate, Remove Metadata, Remove Background                                                                                                             |
-| PDF    | Merge, Split, Compress, Organize, Delete Pages, Extract Pages, PDF to Images, Images to PDF, Add Password, Remove Password, Sign                                                  |
-| Text   | Transcribe, Extract Text, Summarize, Translate                                                                                                                                    |
-| Files  | Batch Rename                                                                                                                                                                      |
+| Group  | Tools                                                                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Video  | **Compress Video** ✓, Convert, Trim, **Resize Video** ✓, Crop, **Rotate Video** ✓, **Change Aspect Ratio** ✓, Change Speed, Merge, Mute, Replace Audio, Burn In Subtitles, Video to GIF |
+| Audio  | Convert, Trim, Clean Up, Record, Extract Audio                                                                                                                                          |
+| Images | Compress, Convert, Resize, Rotate, Remove Metadata, Remove Background                                                                                                                   |
+| PDF    | Merge, Split, Compress, Organize, Delete Pages, Extract Pages, PDF to Images, Images to PDF, Add Password, Remove Password, Sign                                                        |
+| Text   | Transcribe, Extract Text, Summarize, Translate                                                                                                                                          |
+| Files  | Batch Rename                                                                                                                                                                            |
 
 ✓ = working now. The rest are coming.
 

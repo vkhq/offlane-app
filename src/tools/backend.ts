@@ -431,6 +431,14 @@ export function timeRange(
   };
 }
 
+// Picture shapes, as Change Aspect Ratio's editor works them out too.
+export {
+  aspectPlan,
+  parseRatio,
+  type AspectFit,
+  type AspectPlan,
+} from '../shared/aspectFrame';
+
 // Picture sizes, as Resize Video's editor works them out too.
 export {
   fitInside,

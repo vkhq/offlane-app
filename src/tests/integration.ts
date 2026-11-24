@@ -81,6 +81,14 @@ import muteVideo from '../tools/video/mute-video/handler';
 import trimVideo from '../tools/video/trim-video/handler';
 import resizeVideo from '../tools/video/resize-video/handler';
 import rotateVideo from '../tools/video/rotate-video/handler';
+import changeAspectRatio from '../tools/video/change-aspect-ratio/handler';
+import {
+  aspectPlan,
+  barsOf,
+  fitFrame,
+  largestPart,
+  parseRatio,
+} from '../shared/aspectFrame';
 import {
   atHeight,
   atWidth,
@@ -2590,6 +2598,314 @@ describe('tool queue', () => {
       });
       assert.equal(noVideo.status, 'failed');
       assert.match(noVideo.error ?? '', /no video to rotate/);
+
+      for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test('Change Aspect Ratio works out the new shape', () => {
+    const wide = { width: 1920, height: 1080 };
+    const tall = { width: 1080, height: 1920 };
+    assert.deepEqual(parseRatio('9:16 Vertical'), { width: 9, height: 16 });
+    assert.equal(parseRatio('Custom'), null);
+    // Fit: the shape at the video's long side, the video scaled into it.
+    assert.deepEqual(fitFrame(wide, { width: 9, height: 16 }), tall);
+    assert.deepEqual(fitFrame(tall, { width: 1, height: 1 }), {
+      width: 1920,
+      height: 1920,
+    });
+    const bars = aspectPlan(wide, { width: 9, height: 16 }, 'Fit with Bars');
+    assert.deepEqual(bars.output, tall);
+    assert.deepEqual(bars.picture, { width: 1080, height: 608, x: 0, y: 656 });
+    assert.equal(barsOf(bars), 'bars above and below');
+    assert.equal(bars.upscale, false);
+    // Past 4096 comes down to it.
+    assert.deepEqual(
+      aspectPlan(
+        { width: 7680, height: 4320 },
+        { width: 16, height: 9 },
+        'Fit with Bars',
+      ).output,
+      { width: 4096, height: 2304 },
+    );
+    // Fill: the largest part of the shape, unscaled, centred by default.
+    assert.deepEqual(largestPart(wide, { width: 9, height: 16 }), {
+      width: 608,
+      height: 1080,
+    });
+    assert.deepEqual(largestPart(wide, { width: 4, height: 5 }), {
+      width: 864,
+      height: 1080,
+    });
+    const fill = aspectPlan(wide, { width: 9, height: 16 }, 'Fill and Crop');
+    assert.deepEqual(fill.output, { width: 608, height: 1080 });
+    assert.deepEqual(fill.part, { width: 608, height: 1080, x: 656, y: 0 });
+    assert.equal(fill.upscale, false);
+    // Where it was put, on even pixels, kept inside the picture.
+    const at = (x: number, y: number) =>
+      aspectPlan(tall, { width: 1, height: 1 }, 'Fill and Crop', { x, y }).part;
+    assert.deepEqual(at(-1, -1), { width: 1080, height: 1080, x: 0, y: 420 });
+    assert.deepEqual(at(0, 101), { width: 1080, height: 1080, x: 0, y: 100 });
+    assert.deepEqual(at(500, 5000), {
+      width: 1080,
+      height: 1080,
+      x: 0,
+      y: 840,
+    });
+    // Custom: exactly the size typed, the video scaled to it.
+    const custom = aspectPlan(
+      wide,
+      { width: 1080, height: 1920 },
+      'Fill and Crop',
+      {
+        size: { width: 1080, height: 1920 },
+      },
+    );
+    assert.deepEqual(custom.output, tall);
+    assert.equal(custom.upscale, true);
+    // Already that shape.
+    assert.equal(
+      aspectPlan(wide, { width: 16, height: 9 }, 'Fit with Bars').same,
+      true,
+    );
+    assert.equal(
+      barsOf(aspectPlan(wide, { width: 16, height: 9 }, 'Fit with Bars')),
+      'no bars',
+    );
+  });
+
+  test(
+    'Change Aspect Ratio reshapes a video with bars or a crop',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'aspect');
+      await fs.mkdir(dir, { recursive: true });
+      // 1280×720, green with a red left edge and a blue right edge, so
+      // what is kept shows where a crop was.
+      const edged = (name: string, size: string, silent = false) => {
+        const [w] = size.split('x').map(Number);
+        const file = path.join(dir, name);
+        ffmpegOk([
+          '-f',
+          'lavfi',
+          '-i',
+          `color=c=green:s=${size}:d=1:r=25,drawbox=x=0:y=0:w=${w / 8}:h=ih:c=red:t=fill,drawbox=x=${w - w / 8}:y=0:w=${w / 8}:h=ih:c=blue:t=fill`,
+          ...(silent
+            ? []
+            : ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1']),
+          '-c:v',
+          'mpeg4',
+          '-q:v',
+          '2',
+          ...(silent ? [] : ['-c:a', 'aac', '-shortest']),
+          file,
+        ]);
+        return file;
+      };
+      const wide = edged('wide.mp4', '1280x720');
+      const tall = edged('tall.mp4', '720x1280', true);
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', wide, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** Its size, rotation tag and streams, and the colour of its first
+       *  frame in a `grid` (columns x rows), left to right, top down. */
+      const look = (file: string, grid = '3x1') => {
+        const probed = JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'stream=codec_type,codec_name,width,height:stream_side_data=rotation',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            width?: number;
+            height?: number;
+            side_data_list?: { rotation?: number }[];
+          }[];
+        };
+        const video = probed.streams.find((s) => s.codec_type === 'video');
+        const pixels = ffmpegOk([
+          '-i',
+          file,
+          '-frames:v',
+          '1',
+          '-vf',
+          `format=rgb24,scale=${grid.replace('x', ':')}:flags=area`,
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'rgb24',
+          'pipe:1',
+        ]);
+        const colours: string[] = [];
+        for (let i = 0; i < pixels.length; i += 3) {
+          const [r, g, b] = [pixels[i], pixels[i + 1], pixels[i + 2]];
+          colours.push(
+            Math.max(r, g, b) < 40
+              ? 'black'
+              : r > g && r > b
+                ? 'red'
+                : b > g
+                  ? 'blue'
+                  : 'green',
+          );
+        }
+        return {
+          size: video ? `${video.width}x${video.height}` : null,
+          rotation: video?.side_data_list?.[0]?.rotation ?? 0,
+          streams: probed.streams.map((s) => `${s.codec_name},${s.codec_type}`),
+          colours: colours.join(' '),
+        };
+      };
+
+      const tools = queue({ 'change-aspect-ratio': changeAspectRatio });
+      const made: string[] = [];
+      const reshape = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('change-aspect-ratio', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return done;
+      };
+      const output = (done: { outputs: string[] }, grid?: string) =>
+        look(path.join(outDir(), done.outputs[0]), grid);
+
+      assert.equal(look(wide).colours, 'red green blue');
+
+      // Fit at 9:16: the long side kept, bars above and below.
+      const bars = await reshape(wide, {
+        aspect: '9:16 Vertical',
+        fit: 'Fit with Bars',
+      });
+      assert.equal(bars.status, 'done', bars.error ?? '');
+      assert.deepEqual(bars.outputs, ['wide-9x16.mp4']);
+      assert.equal(bars.note, undefined);
+      assert.deepEqual(output(bars, '1x3'), {
+        size: '720x1280',
+        rotation: 0,
+        streams: ['h264,video', 'aac,audio'],
+        colours: 'black green black',
+      });
+
+      // Portrait at 16:9: bars at the sides; no sound in, none out.
+      const sides = await reshape(tall, {
+        aspect: '16:9 Landscape',
+        fit: 'Fit with Bars',
+      });
+      assert.equal(sides.status, 'done', sides.error ?? '');
+      const sidesLook = output(sides, '5x1');
+      assert.equal(sidesLook.size, '1280x720');
+      assert.deepEqual(sidesLook.streams, ['h264,video']);
+      assert.equal(sidesLook.colours.split(' ')[0], 'black');
+      assert.equal(sidesLook.colours.split(' ')[4], 'black');
+
+      // Fill at 9:16: 406×720, unscaled, from the middle by default…
+      const middle = await reshape(wide, {
+        aspect: '9:16 Vertical',
+        fit: 'Fill and Crop',
+      });
+      assert.equal(middle.status, 'done', middle.error ?? '');
+      assert.equal(middle.note, undefined);
+      assert.deepEqual(output(middle), {
+        size: '406x720',
+        rotation: 0,
+        streams: ['h264,video', 'aac,audio'],
+        colours: 'green green green',
+      });
+      // …from where it was put, or kept inside the picture if past it.
+      const left = await reshape(wide, {
+        aspect: '9:16 Vertical',
+        fit: 'Fill and Crop',
+        cropX: 0,
+        cropY: 0,
+      });
+      assert.equal(output(left).colours.split(' ')[0], 'red');
+      const right = await reshape(wide, {
+        aspect: '9:16 Vertical',
+        fit: 'Fill and Crop',
+        cropX: 5000,
+        cropY: 0,
+      });
+      assert.equal(output(right).size, '406x720');
+      assert.equal(output(right).colours.split(' ')[2], 'blue');
+      // Under Fit a position is ignored.
+      const fitted = await reshape(wide, {
+        aspect: '1:1 Square',
+        fit: 'Fit with Bars',
+        cropX: 0,
+      });
+      assert.equal(output(fitted, '1x3').colours, 'black green black');
+      assert.equal(output(fitted).size, '1280x1280');
+
+      // Custom, exactly the size typed: upscaled under Fill, and said so.
+      const big = await reshape(wide, {
+        aspect: 'Custom',
+        width: 1080,
+        height: 1920,
+        fit: 'Fill and Crop',
+      });
+      assert.equal(big.status, 'done', big.error ?? '');
+      assert.deepEqual(big.outputs, ['wide-1080x1920.mp4']);
+      assert.match(big.note ?? '', /Upscaled from 406 × 720/);
+      assert.equal(output(big).size, '1080x1920');
+
+      // Already that shape: kept, and said so.
+      const same = await reshape(wide, {
+        aspect: '16:9 Landscape',
+        fit: 'Fit with Bars',
+      });
+      assert.match(same.note ?? '', /already 16:9/);
+      assert.equal(output(same).size, '1280x720');
+
+      // A phone's sideways video is reshaped as it plays, with no tag.
+      const upright = await reshape(turned, {
+        aspect: '9:16 Vertical',
+        fit: 'Fit with Bars',
+      });
+      assert.equal(upright.status, 'done', upright.error ?? '');
+      assert.match(upright.note ?? '', /already 9:16/);
+      assert.equal(output(upright).size, '720x1280');
+      assert.equal(output(upright).rotation, 0);
+
+      // None, the default, until a shape is chosen: nothing to make.
+      const none = await reshape(wide, {});
+      assert.equal(none.status, 'failed');
+      assert.match(none.error ?? '', /Choose an aspect ratio first/);
+
+      // Sizes it can't make, and a file with no video, fail with why.
+      const tiny = await reshape(wide, {
+        aspect: 'Custom',
+        width: 8,
+        height: 4,
+      });
+      assert.match(tiny.error ?? '', /at least 16 px/);
+      const huge = await reshape(wide, {
+        aspect: 'Custom',
+        width: 8000,
+        height: 4500,
+      });
+      assert.match(huge.error ?? '', /at most 4096 px/);
+      const noVideo = await reshape(sound, { aspect: '1:1 Square' });
+      assert.match(noVideo.error ?? '', /no video to reshape/);
 
       for (const name of made) rmSync(path.join(outDir(), name));
     },
