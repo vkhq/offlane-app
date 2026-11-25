@@ -50,6 +50,9 @@ export const IPC = {
   toolsPreparePlayback: 'tools:prepare-playback',
   toolsCancelPlayback: 'tools:cancel-playback',
   toolsSaveRecording: 'tools:save-recording',
+  toolsMakePreview: 'tools:make-preview',
+  toolsCancelPreview: 'tools:cancel-preview',
+  toolsGifBytes: 'tools:gif-bytes',
   sessionsSave: 'sessions:save',
   sessionsList: 'sessions:list',
   sessionsGet: 'sessions:get',
@@ -68,6 +71,7 @@ export const IPC = {
   externalToolsChanged: 'external:changed',
   toolJobUpdated: 'tools:job-updated',
   toolJobRemoved: 'tools:job-removed',
+  toolPreviewProgress: 'tools:preview-progress',
   sessionsChanged: 'sessions:changed',
 } as const;
 

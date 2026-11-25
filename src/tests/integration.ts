@@ -84,6 +84,8 @@ import rotateVideo from '../tools/video/rotate-video/handler';
 import changeAspectRatio from '../tools/video/change-aspect-ratio/handler';
 import cropVideo from '../tools/video/crop-video/handler';
 import changeSpeed from '../tools/video/change-speed/handler';
+import videoToGif from '../tools/video/video-to-gif/handler';
+import { gifDelays, gifPlays } from '../shared/gif';
 import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
 import {
@@ -3387,6 +3389,329 @@ describe('tool queue', () => {
       assert.match(noVideo.error ?? '', /no video to speed up/);
 
       for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test(
+    'Video to GIF turns a part of a video into a looping GIF',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'gif');
+      await fs.mkdir(dir, { recursive: true });
+      // Four seconds at 25 fps, with a tone, 640 wide.
+      const clip = path.join(dir, 'clip.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=640x360:rate=25',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=4',
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-shortest',
+        clip,
+      ]);
+      const turned = path.join(dir, 'turned.mp4');
+      ffmpegOk(['-display_rotation', '90', '-i', clip, '-c', 'copy', turned]);
+      const sound = path.join(dir, 'sound.m4a');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:a',
+        'aac',
+        sound,
+      ]);
+
+      /** The GIF's streams, size and frame count. */
+      const gifOf = (file: string) =>
+        (
+          JSON.parse(
+            spawnSync(vendorFfprobe, [
+              '-v',
+              'error',
+              '-count_frames',
+              '-show_entries',
+              'stream=codec_type,codec_name,width,height,nb_read_frames',
+              '-of',
+              'json',
+              file,
+            ]).stdout.toString(),
+          ) as {
+            streams: {
+              codec_type: string;
+              codec_name: string;
+              width: number;
+              height: number;
+              nb_read_frames: string;
+            }[];
+          }
+        ).streams;
+
+      const tools = queue({ 'video-to-gif': videoToGif });
+      const made: string[] = [];
+      const make = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('video-to-gif', {
+          files: [file],
+          links: [],
+          values: { width: '320 px', frameRate: '10 fps', ...values },
+        });
+        const result = await settled(tools, job.id);
+        made.push(...result.outputs);
+        const out = result.outputs[0];
+        return {
+          ...result,
+          streams: out ? gifOf(path.join(outDir(), out)) : [],
+          bytes: out ? statSync(path.join(outDir(), out)).size : 0,
+        };
+      };
+
+      // 1 s to 3 s at 320 px and 10 fps: one GIF stream, 320×180, 20 frames.
+      const part = await make(clip, { start: 1, end: 3 });
+      assert.equal(part.status, 'done', part.error ?? '');
+      assert.deepEqual(part.outputs, ['clip.gif']);
+      assert.equal(part.note, undefined);
+      assert.equal(part.streams.length, 1);
+      assert.equal(part.streams[0].codec_name, 'gif');
+      assert.equal(part.streams[0].width, 320);
+      assert.equal(part.streams[0].height, 180);
+      const frames = Number(part.streams[0].nb_read_frames);
+      assert.ok(Math.abs(frames - 20) <= 1, String(frames));
+      // It loops forever: the NETSCAPE2.0 block, with a count of 0.
+      const bytes = readFileSync(path.join(outDir(), 'clip.gif'));
+      const loop = bytes.indexOf('NETSCAPE2.0');
+      assert.ok(loop > 0, 'no loop block');
+      assert.equal(bytes.readUInt16LE(loop + 13), 0);
+      assert.equal(gifPlays(bytes), Infinity);
+
+      // Loop off: no loop block, so it plays once and stops.
+      const once = await make(clip, { start: 1, end: 2, loop: false });
+      assert.equal(once.status, 'done', once.error ?? '');
+      const onceBytes = readFileSync(path.join(outDir(), once.outputs[0]));
+      assert.equal(onceBytes.indexOf('NETSCAPE2.0'), -1);
+      assert.equal(gifPlays(onceBytes), 1);
+
+      // A higher frame rate gives more frames over the same part.
+      const smooth = await make(clip, {
+        start: 1,
+        end: 3,
+        frameRate: '24 fps',
+      });
+      const more = Number(smooth.streams[0].nb_read_frames);
+      assert.ok(Math.abs(more - 48) <= 2, String(more));
+
+      // A width over the video's keeps the video's own: never enlarged.
+      const wide = await make(clip, { start: 0, end: 1, width: '960 px' });
+      assert.equal(wide.streams[0].width, 640);
+      assert.equal(wide.streams[0].height, 360);
+
+      // An End past the video's end keeps the rest, and says so.
+      const rest = await make(clip, { start: 3, end: 30 });
+      assert.equal(rest.status, 'done', rest.error ?? '');
+      assert.match(rest.note ?? '', /past the end of the video/);
+      const tail = Number(rest.streams[0].nb_read_frames);
+      assert.ok(Math.abs(tail - 10) <= 1, String(tail));
+
+      // A phone's sideways video comes out upright.
+      const upright = await make(turned, { start: 0, end: 1 });
+      assert.equal(upright.streams[0].width, 320);
+      assert.ok(
+        Math.abs(upright.streams[0].height - 569) <= 1,
+        String(upright.streams[0].height),
+      );
+
+      // Noise barely compresses: a big GIF says how to make it smaller.
+      const noisy = path.join(dir, 'noisy.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'color=gray:size=960x540:rate=30:duration=2,noise=alls=100:allf=t',
+        '-c:v',
+        'mpeg4',
+        '-q:v',
+        '2',
+        noisy,
+      ]);
+      const big = await make(noisy, {
+        start: 0,
+        end: 2,
+        width: '960 px',
+        frameRate: '30 fps',
+      });
+      assert.equal(big.status, 'done', big.error ?? '');
+      assert.ok(big.bytes > 10 * 1024 * 1024, String(big.bytes));
+      assert.match(big.note ?? '', /This GIF is \d+ MB\. A shorter part/);
+
+      // No video, or an End before Start, fails with why.
+      const noVideo = await make(sound, { start: 0, end: 1 });
+      assert.equal(noVideo.status, 'failed');
+      assert.match(noVideo.error ?? '', /no video to turn into a GIF/);
+      const backwards = await make(clip, { start: 2, end: 1 });
+      assert.equal(backwards.status, 'failed');
+      assert.match(backwards.error ?? '', /End must be after Start/);
+
+      for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+
+  test(
+    "a GIF's frame delays are read from its own blocks",
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'gif-delays');
+      await fs.mkdir(dir, { recursive: true });
+      /** A two-second GIF at `rate` fps, as Video to GIF makes them. */
+      const make = (rate: number) => {
+        const file = path.join(dir, `${rate}.gif`);
+        ffmpegOk([
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=2:size=160x90:rate=25',
+          '-filter_complex',
+          `fps=${rate},split[a][b];[a]palettegen[p];[b][p]paletteuse`,
+          '-loop',
+          '0',
+          file,
+        ]);
+        return file;
+      };
+      /** Each frame's length as ffprobe reads it, in ms. */
+      const probed = (file: string) =>
+        spawnSync(vendorFfprobe, [
+          '-v',
+          'error',
+          '-show_entries',
+          'packet=duration_time',
+          '-of',
+          'csv=p=0',
+          file,
+        ])
+          .stdout.toString()
+          .trim()
+          .split('\n')
+          .map((line) => Math.round(Number(line) * 1000));
+      for (const rate of [10, 15, 24]) {
+        const file = make(rate);
+        const delays = gifDelays(readFileSync(file));
+        assert.deepEqual(delays, probed(file), `${rate} fps`);
+        // 15 fps can't be kept in hundredths of a second: 60s and 70s.
+        const total = delays!.reduce((sum, delay) => sum + delay, 0);
+        assert.ok(Math.abs(total - 2000) <= 10, `${rate} fps: ${total} ms`);
+      }
+      // A delay of 10 ms or less plays as 100 ms, as in browsers; not a
+      // GIF at all, nothing.
+      const fast = readFileSync(make(10));
+      const at = fast.indexOf(Buffer.from([0x21, 0xf9, 0x04]));
+      fast.writeUInt16LE(1, at + 4);
+      assert.equal(gifDelays(fast)![0], 100);
+      // How many times it plays: over and over, a set number, or once.
+      assert.equal(gifPlays(fast), Infinity);
+      const thrice = path.join(dir, 'thrice.gif');
+      ffmpegOk(['-i', make(10), '-loop', '2', thrice]);
+      assert.equal(gifPlays(readFileSync(thrice)), 3);
+      const once = path.join(dir, 'once.gif');
+      ffmpegOk(['-i', make(10), '-loop', '-1', once]);
+      assert.equal(gifPlays(readFileSync(once)), 1);
+      assert.equal(
+        gifDelays(new TextEncoder().encode('not a gif at all')),
+        null,
+      );
+    },
+  );
+
+  test(
+    'a preview runs the tool without a job, and can be stopped',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'preview');
+      const into = path.join(dir, 'previews');
+      await fs.mkdir(dir, { recursive: true });
+      const clip = path.join(dir, 'clip.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=4:size=640x360:rate=25',
+        '-c:v',
+        'mpeg4',
+        clip,
+      ]);
+      const tools = queue({
+        'video-to-gif': videoToGif,
+        'trim-video': trimVideo,
+      });
+      const values = { start: 1, end: 2, width: '320 px', frameRate: '10 fps' };
+      const listed: string[] = [];
+      tools.on('job-updated', (job) => listed.push(job.id));
+
+      // The GIF the tool would make: written in the folder given, never
+      // in the output folder, and no job is listed.
+      const made = await tools.preview(
+        'video-to-gif',
+        { file: clip, values },
+        { dir: into, signal: new AbortController().signal },
+      );
+      assert.equal(path.dirname(made.output), into);
+      assert.match(path.basename(made.output), /clip\.gif$/);
+      assert.equal(
+        readFileSync(made.output).subarray(0, 6).toString(),
+        'GIF89a',
+      );
+      assert.equal(made.note, undefined);
+      assert.deepEqual(listed, []);
+      assert.deepEqual(tools.list(), []);
+      assert.equal(existsSync(path.join(outDir(), 'clip.gif')), false);
+
+      // The same as running it: byte for byte.
+      const [job] = tools.run('video-to-gif', {
+        files: [clip],
+        links: [],
+        values,
+      });
+      const run = await settled(tools, job.id);
+      assert.equal(run.status, 'done', run.error ?? '');
+      const saved = path.join(outDir(), run.outputs[0]);
+      assert.ok(readFileSync(saved).equals(readFileSync(made.output)));
+      rmSync(saved);
+      rmSync(made.output);
+
+      // Stopped part way, it says so and leaves nothing behind.
+      const stop = new AbortController();
+      const stopped = tools.preview(
+        'video-to-gif',
+        { file: clip, values: { ...values, start: 0, end: 4 } },
+        { dir: into, signal: stop.signal },
+      );
+      setTimeout(() => stop.abort(), 20);
+      await assert.rejects(stopped, /Cancelled/);
+      assert.deepEqual(readdirSync(into), []);
+
+      // Its errors are the tool's own; a tool that doesn't preview can't.
+      await assert.rejects(
+        tools.preview(
+          'video-to-gif',
+          { file: clip, values: { ...values, start: 3, end: 2 } },
+          { dir: into, signal: new AbortController().signal },
+        ),
+        /End must be after Start/,
+      );
+      await assert.rejects(
+        tools.preview(
+          'trim-video',
+          { file: clip, values: { start: 0, end: 1 } },
+          { dir: into, signal: new AbortController().signal },
+        ),
+        /can't be previewed/,
+      );
+      assert.deepEqual(readdirSync(into), []);
     },
   );
 

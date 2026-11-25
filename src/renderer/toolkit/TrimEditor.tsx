@@ -9,9 +9,18 @@ import {
 
 import { clock } from '../../shared/tools';
 import type { MediaRef } from '../../shared/types';
-import { ChevronLeft, ChevronRight, LoaderCircle } from '../components/icons';
+import { useTabView } from '../tabState';
+import {
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
+  Minus,
+  MoveHorizontal,
+  Plus,
+} from '../components/icons';
 import { PlayButton, useEditorVideo } from './editorVideo';
 import type { ToolEditorProps } from './standardTool';
+import { iconButton, smallButton } from './styles';
 
 /** The shortest part that can be kept, in seconds. */
 const shortest = 0.1;
@@ -33,15 +42,161 @@ const rulerLabel = (seconds: number) => {
 
 /** Steps between ruler labels, in seconds: the first leaving ~72px. */
 const rulerSteps = [
-  0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200,
+  0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200,
 ];
+/** The handles' width at rest, in px. */
+const handleWidth = 12;
+/** Zoomed all the way in, this many seconds fill the timeline. */
+const closest = 0.5;
+/** How near the timeline's edge a drag scrolls it, in px. */
+const edgeZone = 28;
 
 const round = (seconds: number) => Math.round(seconds * 100) / 100;
 const clamp = (value: number, low: number, high: number) =>
   Math.min(high, Math.max(low, value));
 
-/** Frames by file, moment and height, asked of the main process once. */
-const frames = new Map<string, Promise<string | null>>();
+/** How long a frame's moment must rest (zooming, scrolling) before it is
+ *  asked for, in ms. */
+const frameSettle = 120;
+/** How many frames are asked of the main process at once. */
+const framesAtOnce = 3;
+/** How many frames off either side of the timeline on show are drawn. */
+const framesAside = 3;
+
+/** Frames made, by file and then moment, as data: URLs. */
+const madeFrames = new Map<string, Map<number, string>>();
+/** Frames asked of the main process, made or being made, by file:moment. */
+const askedFrames = new Map<string, Promise<string | null>>();
+/** A frame waiting its turn, and those waiting for it. */
+type FrameAsk = {
+  key: string;
+  mediaKey: string;
+  at: number;
+  start: () => void;
+  listeners: Set<(image: string | null) => void>;
+};
+/** Waiting frames, in the order asked. */
+const frameQueue: FrameAsk[] = [];
+let framesAsked = 0;
+/** The moment in the middle of the timeline on show (see TrimEditor): the
+ *  frames nearest it are made first, those just off either side after. */
+let frameFocus: { mediaKey: string; seconds: number } | null = null;
+
+/** A pumpFrames waiting to run (see schedulePump). */
+let pumpSoon: number | undefined;
+/**
+ * Pumps once the frames asked for together are all in the queue (they are
+ * asked a few ms apart), so the nearest of them, not the first, go first.
+ */
+function schedulePump() {
+  if (pumpSoon !== undefined) return;
+  pumpSoon = window.setTimeout(() => {
+    pumpSoon = undefined;
+    pumpFrames();
+  }, 16);
+}
+
+/** Starts the waiting frames nearest the middle of the timeline on show,
+ *  a few at a time. */
+function pumpFrames() {
+  while (framesAsked < framesAtOnce && frameQueue.length > 0) {
+    let next = frameQueue.length - 1;
+    if (frameFocus) {
+      const focus = frameFocus;
+      const off = (ask: FrameAsk) =>
+        ask.mediaKey === focus.mediaKey
+          ? Math.abs(ask.at - focus.seconds)
+          : Infinity;
+      for (let index = 0; index < frameQueue.length; index++) {
+        if (off(frameQueue[index]) < off(frameQueue[next])) next = index;
+      }
+    }
+    frameQueue.splice(next, 1)[0].start();
+  }
+}
+
+/**
+ * The frame of `mediaKey` at `at` seconds, to `onFrame` once made. Asked of
+ * the main process once, a few at a time, the latest first. Returns a
+ * cancel: a frame no one waits for any more is never asked for.
+ */
+function askFrame(
+  media: MediaRef,
+  mediaKey: string,
+  at: number,
+  onFrame: (image: string | null) => void,
+): () => void {
+  const key = `${mediaKey}:${at}`;
+  let live = true;
+  const listener = (image: string | null) => live && onFrame(image);
+  const asked = askedFrames.get(key);
+  if (asked) {
+    asked.then(listener, () => {});
+    return () => {
+      live = false;
+    };
+  }
+  let waiting = frameQueue.find((ask) => ask.key === key);
+  if (waiting) {
+    // Asked again: to the front of the line.
+    frameQueue.splice(frameQueue.indexOf(waiting), 1);
+  } else {
+    const ask: FrameAsk = {
+      key,
+      mediaKey,
+      at,
+      listeners: new Set(),
+      start: () => {
+        framesAsked++;
+        const made = window.media.frame(media, at, trackHeight * 2);
+        askedFrames.set(key, made);
+        made
+          .then(
+            (image) => {
+              if (image) {
+                const byMoment = madeFrames.get(mediaKey) ?? new Map();
+                byMoment.set(at, image);
+                madeFrames.set(mediaKey, byMoment);
+              }
+              for (const each of ask.listeners) each(image);
+            },
+            // Asked again next time.
+            () => askedFrames.delete(key),
+          )
+          .finally(() => {
+            framesAsked--;
+            pumpFrames();
+          });
+      },
+    };
+    waiting = ask;
+  }
+  waiting.listeners.add(listener);
+  frameQueue.push(waiting);
+  schedulePump();
+  const mine = waiting;
+  return () => {
+    live = false;
+    mine.listeners.delete(listener);
+    // No one waits for it: it needn't be made at all.
+    const place = frameQueue.indexOf(mine);
+    if (place >= 0 && mine.listeners.size === 0) frameQueue.splice(place, 1);
+  };
+}
+
+/** The frame already made nearest to `at`, to show until its own is. */
+function nearestFrame(mediaKey: string, at: number): string | null {
+  let best: string | null = null;
+  let distance = Infinity;
+  for (const [moment, image] of madeFrames.get(mediaKey) ?? []) {
+    const off = Math.abs(moment - at);
+    if (off < distance) {
+      distance = off;
+      best = image;
+    }
+  }
+  return best;
+}
 
 /**
  * Trim Video's editor, in the manner of a video editor's timeline: the
@@ -63,35 +218,63 @@ export function TrimEditor({
   values,
   onChange,
   locked,
-}: ToolEditorProps) {
+  clip,
+}: ToolEditorProps & {
+  /**
+   * Seconds a fresh editor keeps from the middle of the video (all of a
+   * shorter one), zoomed in so that part fills half the timeline, as
+   * Video to GIF starts. Without it, a fresh editor keeps the whole video.
+   */
+  clip?: number;
+}) {
   const video = useRef<HTMLVideoElement>(null);
+  /** The track's whole length, zoomed; it scrolls inside `viewport`. */
   const lane = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  /** The timeline's card: a pinch anywhere on it zooms the timeline. */
+  const timelineCard = useRef<HTMLDivElement>(null);
   const { source, failed, mediaKey } = useEditorVideo(media);
   const [duration, setDuration] = useState<number | null>(null);
   const [aspect, setAspect] = useState(16 / 9);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [width, setWidth] = useState(0);
+  /** The part of the track on show, in px, and how far along it is. */
+  const [viewWidth, setViewWidth] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  /** How many times longer the track is than the part on show. */
+  const [zoom, setZoom] = useState(1);
+  /** The zoom just asked for, ahead of the render that shows it. */
+  const zoomNow = useRef(1);
+  /** The handle being dragged: it thins to a line, to see what's under. */
+  const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
+  const width = viewWidth * zoom;
+  /** How the timeline was left in this tab: kept while another tab shows. */
+  const tabView = useTabView<{ zoom: number; center: number; time: number }>(
+    `timeline:${mediaKey}`,
+  );
 
   /** Whether playing stops at End: only if it started before it. */
   const stopAtEnd = useRef(true);
 
-  // A new file starts from its beginning, its length not yet known.
+  // A new file starts from its beginning, its length not yet known, and
+  // all of it on show.
   useEffect(() => {
     setDuration(null);
     setTime(0);
+    setZoom(1);
+    zoomNow.current = 1;
   }, [mediaKey]);
   useEffect(() => {
     if (source?.aspect) setAspect(source.aspect);
   }, [source]);
 
-  // The track's width, for their frames, ruler and handles.
+  // The width on show, for the frames, ruler and handles.
   useLayoutEffect(() => {
-    const element = lane.current;
+    const element = viewport.current;
     if (!element) return;
-    const watch = new ResizeObserver(() => setWidth(element.clientWidth));
+    const watch = new ResizeObserver(() => setViewWidth(element.clientWidth));
     watch.observe(element);
-    setWidth(element.clientWidth);
+    setViewWidth(element.clientWidth);
     return () => watch.disconnect();
   }, []);
 
@@ -100,17 +283,40 @@ export function TrimEditor({
   const keep = (next: { start: number; end: number }) =>
     onChange({ start: round(next.start), end: round(next.end) });
 
-  // Once its length is known: a fresh editor keeps the whole video, and
-  // a range from another video is fitted to this one.
+  // Once its length is known: a fresh editor keeps the whole video (or,
+  // with `clip`, that much from its middle, zoomed in on), and a range
+  // from another video is fitted to this one. Then the timeline is put
+  // back as it was left in this tab, or, coming back with nothing to put
+  // back (as after a reload), zoomed in on the part kept.
   useEffect(() => {
-    if (!duration || locked) return;
-    const fresh = start === 0 && end === 10 && duration !== 10;
-    if (fresh || end > duration || start >= end) {
-      const fittedStart = start < duration - shortest ? start : 0;
-      keep({
-        start: fittedStart,
-        end: fresh || end > duration || end <= fittedStart ? duration : end,
-      });
+    if (!duration) return;
+    let from = start;
+    let to = end;
+    if (!locked) {
+      // Still the options' defaults: nothing set on this video yet.
+      const untouched = start === 0 && end === 10;
+      if (clip && untouched && duration > clip) {
+        from = round(duration / 2 - clip / 2);
+        keep({ start: from, end: from + clip });
+        zoomToRange(from, from + clip, 0.5);
+        // The playhead at its start: the video shows it, and Play plays it.
+        seek(from);
+        return;
+      }
+      const fresh = untouched && duration !== 10;
+      if (fresh || end > duration || start >= end) {
+        from = start < duration - shortest ? start : 0;
+        to = fresh || end > duration || end <= from ? duration : end;
+        keep({ start: from, end: to });
+      }
+    }
+    const saved = tabView.read();
+    if (saved) {
+      zoomAround(saved.zoom, saved.center);
+      seek(saved.time);
+    } else if (to - from < duration - shortest) {
+      zoomToRange(from, to, 0.5);
+      seek(from);
     }
     // Only when the length becomes known, not on every change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,6 +478,7 @@ export function TrimEditor({
         break;
       case 'ArrowLeft':
       case 'ArrowRight':
+        jumped.current = true;
         seek(now + (event.key === 'ArrowLeft' ? -5 : 5));
         break;
       case 'ArrowUp':
@@ -281,7 +488,10 @@ export function TrimEditor({
           event.key === 'ArrowUp'
             ? stops.filter((at) => at > now + 0.01).sort((a, b) => a - b)[0]
             : stops.filter((at) => at < now - 0.01).sort((a, b) => b - a)[0];
-        if (next !== undefined) seek(next);
+        if (next !== undefined) {
+          jumped.current = true;
+          seek(next);
+        }
         break;
       }
       default:
@@ -313,6 +523,148 @@ export function TrimEditor({
 
   const x = (seconds: number) =>
     duration ? (clamp(seconds, 0, duration) / duration) * width : 0;
+
+  /** Zoomed all the way in, `closest` seconds fill the part on show. */
+  const maxZoom = duration
+    ? Math.max(1, Math.min(1000, duration / closest))
+    : 1;
+  /** The moment to keep in place as the zoom changes, and where it was on
+   *  show, in px; put back once the new length is laid out. */
+  const anchor = useRef<{ seconds: number; offset: number } | null>(null);
+  /**
+   * Zooms to `next`, keeping a moment where it is on show: the one under
+   * `clientX` (a pinch's pointer), else the playhead if it is on show, else
+   * the one in the middle.
+   */
+  const zoomTo = (next: number, clientX?: number) => {
+    const view = viewport.current;
+    if (!view || !duration || !viewWidth) return;
+    const current = zoomNow.current;
+    const z = clamp(next, 1, maxZoom);
+    if (Math.abs(z - current) < 1e-3) return;
+    // Several turns of a pinch before a render keep the first's moment.
+    if (!anchor.current) {
+      const box = view.getBoundingClientRect();
+      const lengthNow = viewWidth * current;
+      let offset: number;
+      if (clientX !== undefined) {
+        offset = clamp(clientX - box.left, 0, box.width);
+      } else {
+        const playhead = (time / duration) * lengthNow - view.scrollLeft;
+        offset =
+          playhead >= 0 && playhead <= box.width ? playhead : box.width / 2;
+      }
+      anchor.current = {
+        seconds: ((view.scrollLeft + offset) / lengthNow) * duration,
+        offset,
+      };
+    }
+    zoomNow.current = z;
+    setZoom(z);
+  };
+  useLayoutEffect(() => {
+    const view = viewport.current;
+    const kept = anchor.current;
+    anchor.current = null;
+    if (!view || !kept || !duration) return;
+    view.scrollLeft = (kept.seconds / duration) * width - kept.offset;
+    setScrollLeft(view.scrollLeft);
+    // Once the new length is laid out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom]);
+
+  /** Zooms so the part kept fills most of the timeline, in the middle. */
+  const zoomToSelection = () => zoomToRange(start, end, 0.8);
+  /** Zooms to `next` with the moment `center` in the middle of the
+   *  timeline, as it was left (see tabView). */
+  const zoomAround = (next: number, center: number) => {
+    if (!duration || !viewWidth) return;
+    const z = clamp(next, 1, maxZoom);
+    if (Math.abs(z - zoomNow.current) < 1e-3) return;
+    anchor.current = { seconds: center, offset: viewWidth / 2 };
+    zoomNow.current = z;
+    setZoom(z);
+  };
+  // The middle of what is on show: its frames are made first.
+  useEffect(() => {
+    if (!duration || !viewWidth || !width) return;
+    frameFocus = {
+      mediaKey,
+      seconds: ((scrollLeft + viewWidth / 2) / width) * duration,
+    };
+  }, [mediaKey, scrollLeft, viewWidth, width, duration]);
+
+  // How the timeline is left, for when it comes back in this tab.
+  useEffect(() => {
+    if (!duration || !viewWidth || !width) return;
+    tabView.write({
+      zoom,
+      center: ((scrollLeft + viewWidth / 2) / width) * duration,
+      time,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom, scrollLeft, viewWidth, duration, time]);
+  /** Zooms so `from` to `to` fills `share` of the timeline, in the middle
+   *  (all of the video, at least). */
+  const zoomToRange = (from: number, to: number, share: number) => {
+    if (!duration || !viewWidth) return;
+    const middle = (from + to) / 2;
+    const z = clamp(
+      (duration / Math.max(to - from, shortest)) * share,
+      1,
+      maxZoom,
+    );
+    if (Math.abs(z - zoomNow.current) < 1e-3) {
+      const view = viewport.current;
+      if (view) view.scrollLeft = (middle / duration) * width - viewWidth / 2;
+      return;
+    }
+    anchor.current = { seconds: middle, offset: viewWidth / 2 };
+    zoomNow.current = z;
+    setZoom(z);
+  };
+
+  // A pinch on a trackpad (a wheel turn with Control), or Command with a
+  // mouse's wheel, anywhere on the timeline's card (its ruler, track, the
+  // margin around them) zooms the timeline about the pointer, not the
+  // canvas.
+  const zoomAt = useRef(zoomTo);
+  zoomAt.current = zoomTo;
+  useEffect(() => {
+    const view = timelineCard.current;
+    if (!view) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const scale =
+        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+      zoomAt.current(
+        zoomNow.current * Math.exp(-event.deltaY * scale * 0.01),
+        event.clientX,
+      );
+    };
+    view.addEventListener('wheel', onWheel, { passive: false });
+    return () => view.removeEventListener('wheel', onWheel);
+  }, []);
+
+  /** The playhead was moved by a key, maybe out of view (see onKey). */
+  const jumped = useRef(false);
+  // Zoomed in, the playhead is kept on show as it plays, or when a key
+  // moves it; not when the timeline is put back as it was left, which
+  // keeps its own view.
+  useEffect(() => {
+    const view = viewport.current;
+    const moved = jumped.current;
+    jumped.current = false;
+    if (!view || zoom <= 1 || !duration || dragging) return;
+    if (!playing && !moved) return;
+    const at = x(time);
+    if (at < view.scrollLeft || at > view.scrollLeft + view.clientWidth - 4) {
+      view.scrollLeft = at - view.clientWidth * 0.1;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [time]);
   const timeAt = (clientX: number) => {
     const box = lane.current?.getBoundingClientRect();
     if (!box || !duration || !box.width) return 0;
@@ -342,9 +694,32 @@ export function TrimEditor({
     }
     move(timeAt(event.clientX));
     let ended = false;
+    let pointerX = event.clientX;
+    // Zoomed in, held near (or past) an edge of the timeline, it scrolls
+    // that way, faster the further out, and the drag goes on with it.
+    let scrolling = 0;
+    const scrollAtEdge = () => {
+      const view = viewport.current;
+      if (ended || !view) return;
+      const box = view.getBoundingClientRect();
+      const over =
+        pointerX < box.left + edgeZone
+          ? pointerX - (box.left + edgeZone)
+          : pointerX > box.right - edgeZone
+            ? pointerX - (box.right - edgeZone)
+            : 0;
+      if (over && view.scrollWidth > view.clientWidth) {
+        const before = view.scrollLeft;
+        view.scrollLeft += clamp(over * 0.5, -40, 40);
+        if (view.scrollLeft !== before) move(timeAt(pointerX));
+      }
+      scrolling = requestAnimationFrame(scrollAtEdge);
+    };
+    scrolling = requestAnimationFrame(scrollAtEdge);
     const end = () => {
       if (ended) return;
       ended = true;
+      cancelAnimationFrame(scrolling);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', end);
@@ -353,6 +728,7 @@ export function TrimEditor({
     const onMove = (next: globalThis.PointerEvent) => {
       if (next.pointerId !== id) return;
       if ((next.buttons & 1) === 0) return end();
+      pointerX = next.clientX;
       move(timeAt(next.clientX));
     };
     window.addEventListener('pointermove', onMove);
@@ -363,7 +739,8 @@ export function TrimEditor({
   /** Drags one handle: Start can't pass End, nor End Start. */
   const dragHandle =
     (which: 'start' | 'end') => (event: PointerEvent<HTMLElement>) => {
-      if (locked || !duration) return;
+      if (locked || !duration || event.button !== 0) return;
+      setDragging(which);
       follow(
         event,
         (seconds) => {
@@ -376,8 +753,11 @@ export function TrimEditor({
           // The video shows the moment the handle is at, while it is held.
           peek(next[which]);
         },
-        // Then the playhead's moment again.
-        unpeek,
+        // Then the playhead's moment again, and the handles as they were.
+        () => {
+          setDragging(null);
+          unpeek();
+        },
       );
     };
 
@@ -405,6 +785,31 @@ export function TrimEditor({
       rulerSteps.at(-1)!)
     : 0;
   const marks = step && duration ? Math.floor(duration / step + 1e-6) + 1 : 0;
+  // Only what is on show (and a little either side) is drawn, so a long
+  // video zoomed far in draws no more than one that fits.
+  const shownFrom = scrollLeft - viewWidth / 2;
+  const shownTo = scrollLeft + viewWidth * 1.5;
+  // Frames: those on show and a few either side, ready as it scrolls.
+  const firstTile = Math.max(
+    0,
+    Math.floor(scrollLeft / tileWidth) - framesAside,
+  );
+  const lastTile = Math.min(
+    tiles - 1,
+    Math.ceil((scrollLeft + viewWidth) / tileWidth) + framesAside,
+  );
+  const pxPerMark = duration ? (step / duration) * width : 0;
+  const firstMark = pxPerMark
+    ? Math.max(0, Math.floor(shownFrom / pxPerMark))
+    : 0;
+  const lastMark = pxPerMark
+    ? Math.min(marks - 1, Math.ceil(shownTo / pxPerMark))
+    : -1;
+  // Too narrow for both handles side by side, they sit outside the part
+  // kept, so neither covers the other.
+  const narrow = x(end) - x(start) < handleWidth * 2 + 4;
+  const zoomLabel =
+    zoom < 10 ? `${Math.round(zoom * 10) / 10}×` : `${Math.round(zoom)}×`;
   // The playhead's time sits on its top, kept inside the track.
   const tagWidth = (duration ?? 0) >= 3600 ? 78 : 60;
   const tagLeft =
@@ -453,7 +858,10 @@ export function TrimEditor({
       </div>
 
       {/* The timeline: where the playhead is, and what is kept. */}
-      <div className="rounded-2xl bg-canvas px-3 pt-2.5 pb-3 shadow-card">
+      <div
+        ref={timelineCard}
+        className="rounded-2xl bg-canvas px-3 pt-2.5 pb-3 shadow-card"
+      >
         <div className="grid grid-cols-[1fr_auto_1fr] items-center px-1 pb-1.5 text-[12px] tabular-nums">
           <span>
             <span className="font-semibold">{clock(time)}</span>
@@ -475,61 +883,81 @@ export function TrimEditor({
             </span>
           ) : null}
         </div>
-        <div className="flex">
+        <div
+          ref={viewport}
+          onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}
+          // Zoomed in, it scrolls along (two fingers, or the bar).
+          // Room below for the handles, which stand a little proud of the track.
+          className="overflow-x-auto overflow-y-hidden pb-1"
+        >
           <div
             ref={lane}
             // Dragging anywhere but a handle moves the playhead.
             onPointerDown={(event) => follow(event, seek)}
-            className="relative flex min-w-0 flex-1 cursor-pointer touch-none flex-col gap-1.5 select-none"
+            className="relative flex cursor-pointer touch-none flex-col gap-1.5 select-none"
+            style={{ width: width || '100%' }}
           >
             {/* The ruler. */}
             <div className="relative h-7 text-[11px] font-medium text-ink-soft tabular-nums">
-              {Array.from({ length: marks }, (_, index) => {
-                const at = index * step;
-                const left = x(at);
-                // A label too near the right edge would be cut off.
-                const labelled = left < width - 32;
-                return (
-                  <span key={at}>
-                    <span
-                      className="absolute bottom-0 h-2.5 w-px bg-ink-faint"
-                      style={{ left }}
-                    />
-                    {step / 2 >= 0.5 && x(at + step / 2) < width && (
+              {Array.from(
+                { length: Math.max(0, lastMark - firstMark + 1) },
+                (_, offset) => {
+                  const index = firstMark + offset;
+                  const at = index * step;
+                  const left = x(at);
+                  // A label too near the right edge would be cut off.
+                  const labelled = left < width - 32;
+                  return (
+                    <span key={at}>
                       <span
-                        className="absolute bottom-0 h-1.5 w-px bg-line"
-                        style={{ left: x(at + step / 2) }}
-                      />
-                    )}
-                    {labelled && (
-                      <span
-                        className={`absolute top-1 leading-none ${index === 0 ? '' : '-translate-x-1/2'}`}
+                        className="absolute bottom-0 h-2.5 w-px bg-ink-faint"
                         style={{ left }}
-                      >
-                        {rulerLabel(at)}
-                      </span>
-                    )}
-                  </span>
-                );
-              })}
+                      />
+                      {x(at + step / 2) < width && (
+                        <span
+                          className="absolute bottom-0 h-1.5 w-px bg-line"
+                          style={{ left: x(at + step / 2) }}
+                        />
+                      )}
+                      {labelled && (
+                        <span
+                          className={`absolute top-1 leading-none ${index === 0 ? '' : '-translate-x-1/2'}`}
+                          style={{ left }}
+                        >
+                          {rulerLabel(at)}
+                        </span>
+                      )}
+                    </span>
+                  );
+                },
+              )}
             </div>
 
             {/* The video track: frames along its length. */}
-            <div className="relative flex h-14 overflow-hidden rounded-lg bg-group">
+            <div className="relative h-14 overflow-hidden rounded-lg bg-group">
               {media &&
                 duration &&
-                Array.from({ length: tiles }, (_, index) => (
-                  <Frame
-                    key={`${mediaKey}:${index}:${tiles}`}
-                    media={media}
-                    mediaKey={mediaKey}
-                    width={tileWidth}
-                    seconds={Math.min(
-                      duration - 0.05,
-                      (((index + 0.5) * tileWidth) / width) * duration,
-                    )}
-                  />
-                ))}
+                Array.from(
+                  { length: Math.max(0, lastTile - firstTile + 1) },
+                  (_, offset) => {
+                    const index = firstTile + offset;
+                    return (
+                      <Frame
+                        // By place, not zoom: zooming keeps each frame's
+                        // picture on show until a better one is made.
+                        key={`${mediaKey}:${index}`}
+                        media={media}
+                        mediaKey={mediaKey}
+                        left={index * tileWidth}
+                        width={tileWidth}
+                        seconds={Math.min(
+                          duration - 0.05,
+                          (((index + 0.5) * tileWidth) / width) * duration,
+                        )}
+                      />
+                    );
+                  },
+                )}
             </div>
 
             {/* What is cut, washed out, and the part kept, framed by its
@@ -552,6 +980,8 @@ export function TrimEditor({
                     side="start"
                     seconds={start}
                     locked={locked}
+                    thin={dragging !== null}
+                    outside={narrow}
                     onPointerDown={dragHandle('start')}
                     onKeyDown={nudge('start')}
                     onBlur={unpeek}
@@ -560,11 +990,28 @@ export function TrimEditor({
                     side="end"
                     seconds={end}
                     locked={locked}
+                    thin={dragging !== null}
+                    outside={narrow}
                     onPointerDown={dragHandle('end')}
                     onKeyDown={nudge('end')}
                     onBlur={unpeek}
                   />
                 </div>
+                {/* The moment the handle held is at, over the ruler. */}
+                {dragging && (
+                  <span
+                    className="absolute -top-6 h-5 -translate-x-1/2 rounded-md bg-brand px-1.5 text-[11px] leading-5 font-semibold text-white tabular-nums shadow-sm"
+                    style={{
+                      left: clamp(
+                        x(dragging === 'start' ? start : end),
+                        30,
+                        Math.max(30, width - 30),
+                      ),
+                    }}
+                  >
+                    {clock(dragging === 'start' ? start : end)}
+                  </span>
+                )}
               </div>
             ) : null}
 
@@ -586,7 +1033,9 @@ export function TrimEditor({
                   aria-valuetext={clock(time)}
                   // Its keys are the editor's (see onKey).
                   onPointerDown={(event) => follow(event, seek)}
-                  className="pointer-events-auto absolute top-0 grid h-5 cursor-ew-resize place-items-center rounded-md bg-accent text-[11px] font-semibold text-accent-ink tabular-nums shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  className={`pointer-events-auto absolute top-0 grid h-5 cursor-ew-resize place-items-center rounded-md bg-accent text-[11px] font-semibold text-accent-ink tabular-nums shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                    dragging ? 'opacity-0' : ''
+                  }`}
                   style={{ left: tagLeft, width: tagWidth }}
                 >
                   {clock(time)}
@@ -595,16 +1044,83 @@ export function TrimEditor({
             ) : null}
           </div>
         </div>
+
+        {/* Zooming the timeline in, to set the ends to the frame. */}
+        {duration ? (
+          <div className="flex items-center justify-end gap-1 pt-1 text-[12px] text-ink-soft">
+            {zoom > 1 && (
+              <button
+                type="button"
+                onClick={() => zoomTo(1)}
+                title="Show the whole video"
+                className={smallButton}
+              >
+                Whole Video
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={zoomToSelection}
+              title="Zoom to the part kept"
+              className={smallButton}
+            >
+              <MoveHorizontal size={13} />
+              Fit Selection
+            </button>
+            <span aria-hidden className="mx-1 h-4 w-px bg-line" />
+            <button
+              type="button"
+              aria-label="Zoom Out"
+              title="Zoom out (or pinch)"
+              disabled={zoom <= 1}
+              onClick={() => zoomTo(zoom / 2)}
+              className={`${iconButton} disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent`}
+            >
+              <Minus size={14} />
+            </button>
+            <span
+              aria-live="polite"
+              title="Timeline zoom"
+              className="w-11 text-center font-medium tabular-nums"
+            >
+              {zoomLabel}
+            </span>
+            <button
+              type="button"
+              aria-label="Zoom In"
+              title="Zoom in (or pinch)"
+              disabled={zoom >= maxZoom}
+              onClick={() => zoomTo(zoom * 2)}
+              className={`${iconButton} disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent`}
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-/** One end of the part kept: a tab across the track, to drag. */
+/**
+ * Video to GIF's timeline: Trim Video's, starting on 5 seconds from the
+ * middle of the video, zoomed in on, rather than on all of it.
+ */
+export function GifClipEditor(props: ToolEditorProps) {
+  return <TrimEditor {...props} clip={5} />;
+}
+
+/**
+ * One end of the part kept: a tab across the track, to drag. While either
+ * is dragged both thin to a line, so the frames at the ends show; when the
+ * part kept is too narrow for both side by side, they sit outside it.
+ */
 function Handle({
   side,
   seconds,
   locked,
+  thin,
+  outside,
   onPointerDown,
   onKeyDown,
   onBlur,
@@ -612,69 +1128,96 @@ function Handle({
   side: 'start' | 'end';
   seconds: number;
   locked: boolean;
+  thin: boolean;
+  outside: boolean;
   onPointerDown: (event: PointerEvent<HTMLElement>) => void;
   onKeyDown: (event: KeyboardEvent) => void;
   onBlur: () => void;
 }) {
   const Chevron = side === 'start' ? ChevronLeft : ChevronRight;
+  const start = side === 'start';
+  const place = thin
+    ? `w-[3px] rounded-full ${start ? '-left-[2px]' : '-right-[2px]'}`
+    : `w-3 ${start ? 'rounded-l-lg' : 'rounded-r-lg'} ${
+        outside
+          ? start
+            ? '-left-3'
+            : '-right-3'
+          : start
+            ? '-left-0.5'
+            : '-right-0.5'
+      }`;
   return (
     <span
       role="slider"
       tabIndex={locked ? -1 : 0}
-      aria-label={side === 'start' ? 'Start' : 'End'}
+      aria-label={start ? 'Start' : 'End'}
       aria-valuetext={clock(seconds)}
       aria-valuenow={seconds}
       aria-disabled={locked}
-      title={`${side === 'start' ? 'Start' : 'End'} ${clock(seconds)}`}
+      title={`${start ? 'Start' : 'End'} ${clock(seconds)}`}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
-      className={`pointer-events-auto absolute -inset-y-0.5 grid w-3 place-items-center bg-brand text-white outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
-        side === 'start' ? '-left-0.5 rounded-l-lg' : '-right-0.5 rounded-r-lg'
-      } ${locked ? 'cursor-default' : 'cursor-ew-resize'}`}
+      className={`pointer-events-auto absolute -inset-y-0.5 grid place-items-center bg-brand text-white outline-none transition-[width] duration-100 focus-visible:ring-2 focus-visible:ring-brand/50 ${place} ${
+        locked ? 'cursor-default' : 'cursor-ew-resize'
+      }`}
     >
-      <Chevron size={12} strokeWidth={3} />
+      {!thin && <Chevron size={12} strokeWidth={3} />}
     </span>
   );
 }
 
-/** One frame along the video track, asked for once. */
+/**
+ * One frame along the video track. Until its own moment's picture is made,
+ * it shows the nearest one already made (never nothing, once any is), and
+ * it asks for its own only once its moment has rested, so zooming or
+ * scrolling doesn't ask for frames that are gone a moment later.
+ */
 function Frame({
   media,
   mediaKey,
+  left,
   width,
   seconds,
 }: {
   media: MediaRef;
   mediaKey: string;
+  left: number;
   width: number;
   seconds: number;
 }) {
-  const [image, setImage] = useState<string | null>(null);
+  // To a twentieth of a second: near enough even zoomed all the way in,
+  // and shared between frames that land on the same moment.
+  const at = Math.round(seconds * 20) / 20;
+  const [image, setImage] = useState<string | null>(() =>
+    nearestFrame(mediaKey, at),
+  );
   useEffect(() => {
-    let live = true;
-    // To the tenth of a second: near enough, and shared between widths.
-    const at = Math.round(seconds * 10) / 10;
-    const key = `${mediaKey}:${at}`;
-    let found = frames.get(key);
-    if (!found) {
-      found = window.media.frame(media, at, trackHeight * 2);
-      found.catch(() => frames.delete(key));
-      frames.set(key, found);
+    const own = madeFrames.get(mediaKey)?.get(at);
+    if (own) {
+      setImage(own);
+      return;
     }
-    found.then(
-      (made) => live && setImage(made),
-      () => {},
-    );
+    const near = nearestFrame(mediaKey, at);
+    if (near) setImage(near);
+    let cancel = () => {};
+    const timer = window.setTimeout(() => {
+      cancel = askFrame(media, mediaKey, at, (made) => {
+        if (made) setImage(made);
+      });
+    }, frameSettle);
     return () => {
-      live = false;
+      window.clearTimeout(timer);
+      cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaKey, seconds]);
+  }, [mediaKey, at]);
   return (
     <span
-      className="h-full shrink-0 border-r border-black/20 bg-group bg-cover bg-center last:border-r-0"
+      className="absolute inset-y-0 border-r border-black/20 bg-group bg-cover bg-center"
       style={{
+        left,
         width,
         backgroundImage: image ? `url("${image}")` : undefined,
       }}

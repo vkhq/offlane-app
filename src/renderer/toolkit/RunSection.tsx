@@ -1,4 +1,5 @@
 import type { FileKind } from '../../shared/fileKinds';
+import type { MediaRef } from '../../shared/types';
 import {
   type Options,
   type OptionValues,
@@ -35,6 +36,9 @@ export const runsLock = (jobs: (ToolJob | undefined)[]) =>
  * - the tool's options as a step of their own, linked from the input with
  *   a "<Tool> Options" chip (with none, the button just follows the
  *   input), and its button, saying how many of what it runs on;
+ * - a preview of what it will make, for a tool that has one (see
+ *   StandardTool.preview), between the options and the button, until it
+ *   has run;
  * - once run, the options kept as a record, and the results (see
  *   JobResults), with What's Next.
  */
@@ -52,6 +56,7 @@ export function RunSection<O extends Options>({
   notice,
   onRun,
   ids,
+  media,
 }: {
   tool: Tool;
   config: StandardTool<O>;
@@ -72,8 +77,11 @@ export function RunSection<O extends Options>({
   onRun: () => void;
   /** Its runs, for the results. */
   ids: string[];
+  /** The file its editor shows, for its preview (see StandardTool.preview). */
+  media?: MediaRef | null;
 }) {
-  const { options, action } = config;
+  const { options, action, preview } = config;
+  const Preview = preview?.view;
   const hasOptions = Object.keys(options).some((key) =>
     inBar(options, key, values),
   );
@@ -100,11 +108,27 @@ export function RunSection<O extends Options>({
               busy={busy}
               disabled={locked}
               onRun={onRun}
+              // What it will make, before the button that makes it; gone
+              // once run, as the result then shows it.
+              beforeAction={
+                Preview &&
+                preview &&
+                media &&
+                !locked && (
+                  <>
+                    <FlowLink label={preview.label} tone="info" />
+                    <FlowNode>
+                      <Preview toolId={tool.id} media={media} values={values} />
+                    </FlowNode>
+                  </>
+                )
+              }
             />
             <FlowNotice>{notice}</FlowNotice>
           </FlowNode>
         </>
       )}
+
       <JobResults
         toolId={tool.id}
         ids={ids}

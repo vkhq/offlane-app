@@ -397,7 +397,12 @@ export type SessionMeta = {
 };
 
 /** A file's picture and length, for History; null where it has none. */
-export type FilePreview = { thumbnail: string | null; duration: number | null };
+export type FilePreview = {
+  thumbnail: string | null;
+  duration: number | null;
+  /** A GIF's frame count (and `duration` its length, from its delays). */
+  frames?: number;
+};
 
 /**
  * A file an editor on a tool's page shows (see MediaApi): one the user

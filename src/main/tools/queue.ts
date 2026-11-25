@@ -68,6 +68,9 @@ export type ToolHandler<O extends Options = Options> = {
   /** Takes all its inputs in one job, in order (as Merge does), instead of
    *  one job each. */
   combines?: boolean;
+  /** Can be run as a preview (see ToolQueue.preview): its page shows what
+   *  it will make before it is run, as Video to GIF does. */
+  previews?: boolean;
   run: (context: HandlerContext<OptionValues<O>>) => Promise<void>;
 };
 
@@ -290,6 +293,94 @@ export class ToolQueue extends EventEmitter<{
     });
     this.pump();
     return jobs;
+  }
+
+  /**
+   * Runs a tool's handler on one file just as `run` would, as a preview:
+   * no job is listed or kept, and what it writes goes in `dir` (under a
+   * name of its own), for the caller to show and then delete. Only a tool
+   * whose handler `previews` can. Stopped by `signal`; anything written is
+   * deleted if it fails or is stopped, and every output but the first once
+   * it is done.
+   */
+  async preview(
+    toolId: string,
+    request: { file: string; values: unknown },
+    {
+      dir,
+      signal,
+      onProgress,
+    }: {
+      dir: string;
+      signal: AbortSignal;
+      onProgress?: (percent: number | null) => void;
+    },
+  ): Promise<{ output: string; note?: string }> {
+    const handler = this.deps.handlers.get(toolId);
+    if (!handler?.previews) throw new Error("This tool can't be previewed.");
+    this.deps.assertToolkits?.(this.deps.requirements?.get(toolId) ?? []);
+    const { file } = request;
+    if (!path.isAbsolute(file) || !isFile(file)) {
+      throw new Error(`Can't read ${path.basename(file) || 'that file'}.`);
+    }
+    const values = parseValues(handler.options, request.values) as Record<
+      string,
+      unknown
+    >;
+    // A preview has no attachments: a file option is left empty.
+    for (const [key, setting] of Object.entries(handler.options)) {
+      if (setting.kind === 'file') values[key] = '';
+    }
+    mkdirSync(dir, { recursive: true });
+    const outputs: string[] = [];
+    const name = baseName(file);
+    const prefix = randomUUID().slice(0, 8);
+    let note: string | undefined;
+    let lastProgress = 0;
+    const context: HandlerContext<OptionValues<Options>> = {
+      input: file,
+      inputs: [file],
+      values: values as OptionValues<Options>,
+      signal,
+      progress: (percent) => {
+        const now = Date.now();
+        if (percent !== null && now - lastProgress < 250) return;
+        lastProgress = now;
+        onProgress?.(
+          percent === null ? null : Math.min(Math.max(percent, 0), 100),
+        );
+      },
+      note: (text) => {
+        note = text;
+      },
+      outputPath: (suffix, ext) => {
+        const output = path.join(
+          dir,
+          `${prefix}-${name}${suffix}${outputs.length || ''}.${ext}`,
+        );
+        outputs.push(output);
+        return output;
+      },
+      ffmpeg: () => {
+        const found = this.deps.getFfmpeg();
+        if (!found) throw new ToolkitMissingError('media');
+        return { ffmpeg: found.ffmpeg, ffprobe: found.ffprobe };
+      },
+      run,
+    };
+    try {
+      await handler.run(context);
+      if (signal.aborted) throw new Error('Cancelled');
+      const [output, ...rest] = outputs;
+      if (!output || !existsSync(output)) {
+        throw new Error('The preview made nothing.');
+      }
+      for (const extra of rest) rmSync(extra, { force: true });
+      return { output, ...(note && { note }) };
+    } catch (error) {
+      for (const output of outputs) rmSync(output, { force: true });
+      throw signal.aborted ? new Error('Cancelled') : error;
+    }
   }
 
   cancel(id: string) {

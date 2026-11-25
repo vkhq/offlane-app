@@ -164,11 +164,15 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
       live = false;
     };
   }, [api, done, job.id]);
-  const playable = done && (kind === 'video' || kind === 'audio');
+  // A GIF plays too, in the GIF player.
+  const gif = done && /\.gif$/i.test(name);
+  const playable = done && (kind === 'video' || kind === 'audio' || gif);
 
   const details = done
     ? [
         name.match(/\.([a-z0-9]+)$/i)?.[1]?.toUpperCase(),
+        // A GIF's frames, once its preview has counted them.
+        preview?.frames !== undefined && `${preview.frames} frames`,
         job.outputs.length > 1 && `${job.outputs.length} files`,
         job.outputSize !== undefined && formatBytes(job.outputSize),
         savingsOf(job),
@@ -194,6 +198,7 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
               title: name,
               audio: kind === 'audio',
               poster: preview?.thumbnail ?? undefined,
+              ...(gif && { gif: () => api.gifBytes(job.id) }),
             }
           : undefined
       }

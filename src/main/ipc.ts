@@ -15,8 +15,10 @@ import {
 } from 'electron';
 
 import { existsSync, statSync } from 'node:fs';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { gifDelays } from '../shared/gif';
 import { IPC, type IpcResult } from '../shared/ipc';
 import { isStorageItemId, type StorageItemId } from '../shared/storage';
 import { isToolkitId, type ToolkitId } from '../shared/toolkits';
@@ -63,6 +65,8 @@ export type IpcDeps = {
   externalTools: ExternalTools;
   /** What the app keeps on disk, for Settings › Storage. */
   storage: StorageInventory;
+  /** Where tools' previews are written, each deleted once it is read. */
+  previewDir: string;
   /** URL prefix our page is loaded from. */
   appOrigin: string;
   getMainWindow: () => BrowserWindow | null;
@@ -527,10 +531,23 @@ export function registerIpc(deps: IpcDeps): void {
           .previewFile(output)
           .catch(() => ({ thumbnail: null, duration: null })),
         sourceThumbnail(output).catch(() => null),
-      ]).then(([own, source]) => ({
-        thumbnail: source ?? own.thumbnail,
-        duration: own.duration,
-      }));
+      ]).then(async ([own, source]) => {
+        // A GIF: its frames, and its length from their delays (FFmpeg
+        // reads it as a still picture).
+        const gif =
+          path.extname(output).toLowerCase() === '.gif'
+            ? await readFile(output)
+                .then((bytes) => gifDelays(bytes))
+                .catch(() => null)
+            : null;
+        return {
+          thumbnail: source ?? own.thumbnail,
+          duration: gif
+            ? gif.reduce((total, delay) => total + delay, 0) / 1000
+            : own.duration,
+          ...(gif && { frames: gif.length }),
+        };
+      });
       outputPreviews.set(output, preview);
     }
     return preview;
@@ -561,6 +578,69 @@ export function registerIpc(deps: IpcDeps): void {
   handle(IPC.toolsCancelPlayback, (id: unknown) =>
     deps.player.cancel(assertId(id)),
   );
+
+  // Previews: a tool run on an editor's file without a job (see
+  // ToolQueue.preview), its file handed back as bytes and then deleted.
+  // One at a time per id: a new one with the same id stops the last.
+  const previewRuns = new Map<string, AbortController>();
+  handle(
+    IPC.toolsMakePreview,
+    async (id: unknown, toolId: unknown, ref: unknown, values: unknown) => {
+      const previewId = assertId(id);
+      if (!isString(toolId, 128)) throw new Error('Invalid request');
+      const { file } = mediaOf(ref);
+      previewRuns.get(previewId)?.abort();
+      const controller = new AbortController();
+      previewRuns.set(previewId, controller);
+      try {
+        const { output, note } = await deps.tools.preview(
+          toolId,
+          { file, values },
+          {
+            dir: deps.previewDir,
+            signal: controller.signal,
+            onProgress: (percent) =>
+              deps.getMainWindow()?.webContents.send(IPC.toolPreviewProgress, {
+                id: previewId,
+                percent,
+              }),
+          },
+        );
+        try {
+          const bytes = await readFile(output);
+          return {
+            bytes: new Uint8Array(bytes),
+            size: bytes.byteLength,
+            ...(note && { note }),
+          };
+        } finally {
+          await rm(output, { force: true });
+        }
+      } finally {
+        if (previewRuns.get(previewId) === controller) {
+          previewRuns.delete(previewId);
+        }
+      }
+    },
+  );
+  handle(IPC.toolsCancelPreview, (id: unknown) => {
+    previewRuns.get(assertId(id))?.abort();
+  });
+  // A finished GIF, for the app's GIF player, which draws its frames
+  // itself; the path comes from the queue's own record.
+  handle(IPC.toolsGifBytes, async (id: unknown) => {
+    const [output] = deps.tools.outputsOf(assertId(id));
+    if (!output || path.extname(output).toLowerCase() !== '.gif') {
+      throw new Error('This isn’t a GIF.');
+    }
+    if (!existsSync(output)) {
+      throw new Error('The file is no longer where it was saved.');
+    }
+    if (statSync(output).size > 1024 * 1024 * 1024) {
+      throw new Error('This GIF is too large to play in the app.');
+    }
+    return new Uint8Array(await readFile(output));
+  });
 
   // Toolkits: the page names one by id, and a variant from its offers;
   // where it is downloaded from is the catalog's business, never the page's.

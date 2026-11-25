@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
 } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -36,7 +37,8 @@ export function onTabStateChange(listener: Listener) {
   return () => void listeners.delete(listener);
 }
 
-/** Keys a snapshot leaves out: where the page was scrolled or panned to. */
+/** Keys a snapshot leaves out: where the page was scrolled or panned to
+ *  (and every `view:` key, see useTabView). */
 const unsaved = new Set(['scroll', 'camera']);
 
 /**
@@ -48,7 +50,13 @@ export function snapshotTab(tabId: string, pathname: string) {
   const prefix = `${pathname}:`;
   for (const [slot, value] of stores.get(tabId) ?? []) {
     const key = slot.slice(prefix.length);
-    if (slot.startsWith(prefix) && !unsaved.has(key)) values[key] = value;
+    if (
+      slot.startsWith(prefix) &&
+      !unsaved.has(key) &&
+      !key.startsWith('view:')
+    ) {
+      values[key] = value;
+    }
   }
   return values;
 }
@@ -129,6 +137,24 @@ export function useTabState<T>(key: string, initial: T | (() => T)) {
     if (changed) listeners.forEach((listener) => listener(id, slot));
   }, [id, slot, value]);
   return [value, setValue] as const;
+}
+
+/**
+ * Where a part of a page was looking, such as a timeline's zoom and scroll,
+ * kept with its tab while another tab shows, as useTabScroll keeps a page's
+ * scroll: read it when the part comes back, write it as it changes. Like
+ * the scroll, it isn't saved with the session (so it doesn't outlast a
+ * reload), and writing it isn't a change to the session.
+ */
+export function useTabView<T>(key: string) {
+  const { id, slot } = useSlot(`view:${key}`);
+  return useMemo(
+    () => ({
+      read: () => stores.get(id)?.get(slot) as T | undefined,
+      write: (value: T) => void storeFor(id).set(slot, value),
+    }),
+    [id, slot],
+  );
 }
 
 /** Keeps the scroll position of a page's scrolling area with its tab. */

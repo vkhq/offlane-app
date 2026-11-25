@@ -17,7 +17,7 @@ import type {
 import { IPC, type IpcResult } from '../shared/ipc';
 import type { StorageApi } from '../shared/storage';
 import type { ToolkitStatus, ToolkitsApi } from '../shared/toolkits';
-import type { ToolJob, ToolsApi } from '../shared/tools';
+import type { PreviewProgress, ToolJob, ToolsApi } from '../shared/tools';
 import type {
   DownloaderApi,
   Job,
@@ -143,6 +143,11 @@ const tools: ToolsApi = {
   onPlaybackProgress: (cb) => on<PlaybackProgress>(IPC.playbackProgress, cb),
   onJob: (cb) => on<ToolJob>(IPC.toolJobUpdated, cb),
   onJobRemoved: (cb) => on<string>(IPC.toolJobRemoved, cb),
+  makePreview: (id, toolId, media, values) =>
+    call(IPC.toolsMakePreview, id, toolId, media, values),
+  cancelPreview: (id) => call(IPC.toolsCancelPreview, id),
+  onPreviewProgress: (cb) => on<PreviewProgress>(IPC.toolPreviewProgress, cb),
+  gifBytes: (id) => call(IPC.toolsGifBytes, id),
 };
 
 // A file an editor shows, named by token or job, never by path.

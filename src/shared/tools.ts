@@ -400,4 +400,33 @@ export type ToolsApi = {
   ) => () => void;
   onJob: (cb: (job: ToolJob) => void) => () => void;
   onJobRemoved: (cb: (id: string) => void) => () => void;
+  /**
+   * Runs a tool on an editor's file as a preview of what it will make (only
+   * a tool whose handler `previews`): nothing is listed or saved, and the
+   * file comes back as bytes. `id` names this preview, so it can be stopped
+   * (cancelPreview, or another makePreview with the same id) and its
+   * progress told apart. Rejects with "Cancelled" once stopped.
+   */
+  makePreview: (
+    id: string,
+    toolId: string,
+    media: import('./types').MediaRef,
+    values: Record<string, unknown>,
+  ) => Promise<ToolPreview>;
+  cancelPreview: (id: string) => Promise<void>;
+  onPreviewProgress: (cb: (progress: PreviewProgress) => void) => () => void;
+  /** A finished job's GIF, as bytes, for the app's GIF player. */
+  gifBytes: (id: string) => Promise<Uint8Array>;
 };
+
+/** A tool's preview (see ToolsApi.makePreview): the file it would make. */
+export type ToolPreview = {
+  bytes: Uint8Array;
+  /** Its size in bytes, as it would be saved. */
+  size: number;
+  /** The handler's note, as a run would show it. */
+  note?: string;
+};
+
+/** How far a preview has got: 0–100, or null while it can't tell. */
+export type PreviewProgress = { id: string; percent: number | null };

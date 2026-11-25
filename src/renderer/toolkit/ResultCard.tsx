@@ -2,6 +2,7 @@ import { type ReactNode, useState } from 'react';
 
 import { type AppIcon, Ellipsis, Play } from '../components/icons';
 import { ProgressBar } from '../components/ProgressBar';
+import { GifPlayerModal } from './GifView';
 import { type PlayerFile, PlayerModal } from './PlayerModal';
 
 /** What a card's Play plays, in the app's player. */
@@ -11,6 +12,9 @@ export type Playable = {
   /** Sound only: its poster shows behind it while it plays. */
   audio?: boolean;
   poster?: string;
+  /** A GIF: its bytes, for the GIF player (see GifView), which shows it
+   *  in place of the video player. */
+  gif?: () => Promise<Uint8Array>;
 };
 
 /**
@@ -153,7 +157,14 @@ export function ResultCard({
           <Ellipsis size={16} />
         </button>
       </div>
-      {playing && play && (
+      {playing && play?.gif && (
+        <GifPlayerModal
+          load={play.gif}
+          title={play.title}
+          onClose={() => setPlaying(false)}
+        />
+      )}
+      {playing && play && !play.gif && (
         <PlayerModal
           file={play.file}
           audio={play.audio}

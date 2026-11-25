@@ -281,6 +281,15 @@ function StepCard({ step }: { step: Step }) {
             notice={notice}
             onRun={() => void run()}
             ids={step.jobIds}
+            media={
+              Editor && chosen[0]
+                ? {
+                    source: chosen[0].source,
+                    jobId: chosen[0].jobId,
+                    index: chosen[0].index,
+                  }
+                : null
+            }
           />
         )}
       </div>

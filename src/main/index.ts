@@ -482,6 +482,11 @@ const inventory = new StorageInventory({
  *  until a tool has run on them (see tools/recordings.ts). */
 const recordings = new Recordings(path.join(tmpdir(), 'offlane-recordings'));
 
+/** Tools' previews (see ToolQueue.preview), each deleted once the page has
+ *  it; anything left from before is cleared at launch. */
+const previewDir = path.join(userData, 'previews');
+rmSync(previewDir, { recursive: true, force: true });
+
 registerIpc({
   manager,
   player,
@@ -494,6 +499,7 @@ registerIpc({
   toolkits,
   externalTools,
   storage: inventory,
+  previewDir,
   appOrigin: pageOrigin,
   getMainWindow: () => mainWindow,
 });

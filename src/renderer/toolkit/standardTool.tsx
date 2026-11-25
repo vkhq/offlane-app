@@ -37,6 +37,22 @@ export type StandardTool<O extends Options> = {
    * own page and as a later step.
    */
   editor?: ComponentType<ToolEditorProps>;
+  /**
+   * A step after the options showing what the tool will make, before it is
+   * run, as Video to GIF's "GIF Preview" shows the GIF (its handler must
+   * `preview`). For a tool with an editor, on the file it shows; gone
+   * once the tool has run, as the result is then there to see.
+   */
+  preview?: { label: string; view: ComponentType<ToolPreviewProps> };
+};
+
+/** What a tool's preview step (see StandardTool.preview) is given. */
+export type ToolPreviewProps = {
+  toolId: string;
+  /** The file the editor shows. */
+  media: MediaRef;
+  /** The tool's option values, as they would be run. */
+  values: Record<string, SettingValue>;
 };
 
 /**
@@ -335,6 +351,7 @@ export function standardTool<O extends Options>(
             notice={notice}
             onRun={() => void run()}
             ids={own}
+            media={media}
           />
         )}
         {!ready && <JobResults toolId={tool.id} ids={own} action={action} />}

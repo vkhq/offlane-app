@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import {
   type OptionValues,
@@ -20,7 +20,8 @@ import { SelectMenu } from './SelectMenu';
  * pressing one drops down its menu, the choice made ticked. Each option is
  * capped in width, so all of them stay in one row, in view. Each name has what it is set to beneath it. The action
  * is its own button under the bar, centred on the flow and linked to the
- * bar by an arrow, as each step leads to the next.
+ * bar by an arrow, as each step leads to the next; `beforeAction` puts a
+ * step between them.
  *
  * `disabled`, once a step has run, keeps the bar as a record of what was
  * chosen, faded: its options no longer open, and there is no action. With no options there is only the action, and nothing once run.
@@ -35,6 +36,7 @@ export function OptionsBar<O extends Options>({
   onRun,
   busy = false,
   disabled = false,
+  beforeAction,
 }: {
   options: O;
   values: OptionValues<O>;
@@ -49,6 +51,9 @@ export function OptionsBar<O extends Options>({
   /** Holds the action while a run is starting. */
   busy?: boolean;
   disabled?: boolean;
+  /** A step between the bar and the action, such as a preview of what it
+   *  will make (see RunSection); it brings its own link from the bar. */
+  beforeAction?: ReactNode;
 }) {
   // Only the options the choices made so far call for.
   const entries = Object.entries(options).filter(([key]) =>
@@ -76,7 +81,8 @@ export function OptionsBar<O extends Options>({
           ))}
         </div>
       )}
-      {!disabled && entries.length > 0 && <FlowLink />}
+      {beforeAction && <div className="w-full">{beforeAction}</div>}
+      {!disabled && (entries.length > 0 || beforeAction) && <FlowLink />}
       {!disabled && (
         <button
           type="button"

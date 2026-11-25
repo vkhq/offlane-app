@@ -42,12 +42,13 @@ export {
   standardTool,
   type ToolEditorProps,
 } from '../renderer/toolkit/standardTool';
-export { TrimEditor } from '../renderer/toolkit/TrimEditor';
+export { GifClipEditor, TrimEditor } from '../renderer/toolkit/TrimEditor';
 export { ResizeEditor } from '../renderer/toolkit/ResizeEditor';
 export { RotateEditor } from '../renderer/toolkit/RotateEditor';
 export { AspectEditor } from '../renderer/toolkit/AspectEditor';
 export { CropEditor } from '../renderer/toolkit/CropEditor';
 export { SpeedEditor } from '../renderer/toolkit/SpeedEditor';
+export { GifPreview } from '../renderer/toolkit/GifPreview';
 export {
   defineTool,
   type Tool,
