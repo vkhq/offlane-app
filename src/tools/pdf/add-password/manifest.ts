@@ -1,4 +1,4 @@
-import { Lock, defineTool } from '../../ui';
+import { Lock, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

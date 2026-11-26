@@ -1,4 +1,4 @@
-import { Eraser, defineTool } from '../../ui';
+import { Eraser, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

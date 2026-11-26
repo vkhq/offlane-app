@@ -1,4 +1,4 @@
-import { SquareSplitHorizontal, defineTool } from '../../ui';
+import { SquareSplitHorizontal, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

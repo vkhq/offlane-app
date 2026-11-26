@@ -44,8 +44,8 @@ export const drop = (
 // Video tools take files only; Download Video is the tool for links.
 export const dropVideos = (links = false) =>
   drop('video', 'video/*', 'MP4, MOV, WebM, MKV and AVI', links);
-export const dropAudio = () =>
-  drop('audio', 'audio/*', 'MP3, M4A, WAV, FLAC and OGG');
+export const dropAudio = (links = true) =>
+  drop('audio', 'audio/*', 'MP3, M4A, WAV, FLAC and OGG', links);
 export const dropImages = () =>
   drop('image', 'image/*', 'JPEG, PNG, WebP, HEIC and TIFF');
 export const dropPdfs = () => drop('pdf', 'application/pdf', 'PDF');

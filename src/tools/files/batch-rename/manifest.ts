@@ -1,4 +1,4 @@
-import { FilePenLine, defineTool } from '../../ui';
+import { FilePenLine, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

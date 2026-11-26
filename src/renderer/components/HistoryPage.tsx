@@ -227,7 +227,7 @@ const statusLooks: Record<SessionState, { dot: string; text: string }> = {
  * One session on the timeline, a single line across: the time it was last
  * worked on (24-hour), joined to the next row's by the line; a picture of
  * what it worked on in a 16:9 slot (an upright one at its own shape in its
- * middle; the tool's icon when there is none); then what it
+ * middle; when there is none, a sound mark for a sound, else the tool's icon); then what it
  * worked on, and under that the tool and how it stands. Every row is the
  * same height, so the times, frames and titles line up. Pressing it opens
  * the session again; the ✕ that shows on hover forgets it.
@@ -312,8 +312,10 @@ function SessionRow({
               {playlist ? <PlaylistBadge count={playlist} /> : null}
             </span>
           ) : (
-            <span className="relative grid size-full place-items-center rounded-2xl bg-group text-ink-faint ring-1 ring-black/5">
-              <Icon size={22} />
+            // No picture: a sound shows the sound mark; anything else (a
+            // PDF, text) its tool's icon. Ink on the usual grey.
+            <span className="relative grid size-full place-items-center rounded-2xl bg-group text-ink ring-1 ring-black/5">
+              {tool.group === 'audio' ? <SoundMark /> : <Icon size={22} />}
               {playlist ? <PlaylistBadge count={playlist} /> : null}
             </span>
           )}
@@ -363,6 +365,26 @@ function playlistSize({ meta, summary }: SessionSummary) {
   if (meta.playlist) return meta.playlist;
   const said = /^Playlist · (\d+) videos?/.exec(summary ?? '');
   return said ? Number(said[1]) : undefined;
+}
+
+/** The sound mark's bars, as shares of its height: short at the ends,
+ *  two tall ones either side of the middle. */
+const soundBars = [16, 44, 100, 44, 24, 60, 100, 44, 16];
+
+/** A sound's stand-in picture: a few thick rounded bars, as a waveform icon
+ *  draws them. The same for every sound; not its real loudness. */
+function SoundMark() {
+  return (
+    <span aria-hidden className="flex h-8 items-center gap-0.75">
+      {soundBars.map((height, index) => (
+        <span
+          key={index}
+          className="w-0.75 rounded-full bg-current"
+          style={{ height: `${height}%` }}
+        />
+      ))}
+    </span>
+  );
 }
 
 /** A playlist's mark on its picture: the list icon and how many videos. */

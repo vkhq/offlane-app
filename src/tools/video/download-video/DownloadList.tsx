@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { fileKindOf } from '../../../shared/fileKinds';
 import type { Job } from '../../../shared/types';
 import {
+  AudioPlayer,
   AudioWaveform,
   Music,
   Play,
@@ -269,7 +270,8 @@ function DownloadCard({
   const openMenu = async (play: () => void) => {
     const stopped = job.status === 'failed' || job.status === 'canceled';
     const choice = await window.app.contextMenu([
-      { id: 'play', label: 'Play', enabled: done },
+      // A sound plays in its own card.
+      ...(audio ? [] : [{ id: 'play', label: 'Play', enabled: done }]),
       { id: 'open', label: 'Open in Default App', enabled: done },
       { id: 'reveal', label: revealLabel, enabled: done },
       { id: 'retry', label: 'Retry', enabled: stopped },
@@ -287,6 +289,19 @@ function DownloadCard({
     if (choice === 'remove') void api.remove(job.id);
   };
 
+  // A downloaded sound is its own player, in place of the card.
+  if (done && audio) {
+    return (
+      <AudioPlayer
+        file={downloadFile(job.id)}
+        title={title}
+        details={detailsOf(job)}
+        next={next}
+        onMenu={() => void openMenu(() => {})}
+      />
+    );
+  }
+
   return (
     <ResultCard
       thumbnail={audio ? null : picture}
@@ -303,8 +318,6 @@ function DownloadCard({
           ? {
               file: downloadFile(job.id),
               title,
-              audio,
-              poster: picture ?? undefined,
             }
           : undefined
       }

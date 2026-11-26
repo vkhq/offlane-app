@@ -25,6 +25,30 @@
       }
     },
     {
+      "files": ["src/tools/*/*/manifest.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\./[^.]",
+                "message": "A tool never imports from another tool's folder. Move what they share into the toolkit."
+              },
+              {
+                "regex": "^(\\.\\./){3,}(renderer|main)/",
+                "message": "A tool imports the app through ../../ui (pages) or ../../backend (handlers)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./ui$",
+                "message": "A manifest imports ../../manifest, not ../../ui: ui reaches components that import the tool registry back, which breaks hot reloading."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["src/renderer/**", "src/main/**", "src/shared/**"],
       "rules": {
         "no-restricted-imports": [

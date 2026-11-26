@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('app', {
   // The window has macOS's sidebar material behind it (see the main process).
   vibrancy: process.platform === 'darwin',
   quit: () => ipcRenderer.send('quit'),
+  setCanvasShown: (shown: boolean) => ipcRenderer.send('canvas-shown', shown),
   userName: (): Promise<string> => ipcRenderer.invoke('user-name'),
   version: (): Promise<string> => ipcRenderer.invoke('app-version'),
   contextMenu: (lines: MenuLine[]): Promise<string | null> =>

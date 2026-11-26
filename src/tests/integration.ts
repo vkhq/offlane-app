@@ -85,6 +85,7 @@ import changeAspectRatio from '../tools/video/change-aspect-ratio/handler';
 import cropVideo from '../tools/video/crop-video/handler';
 import changeSpeed from '../tools/video/change-speed/handler';
 import videoToGif from '../tools/video/video-to-gif/handler';
+import cleanUpAudio from '../tools/audio/clean-up-audio/handler';
 import { gifDelays, gifPlays } from '../shared/gif';
 import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
@@ -3804,6 +3805,282 @@ describe('tool queue', () => {
       assert.ok(
         !readdirSync(outDir()).some((name) => name.startsWith('iphone')),
       );
+    },
+  );
+  test(
+    'Clean Up Audio takes out noise and long pauses and evens out the volume',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'clean');
+      await fs.mkdir(dir, { recursive: true });
+      // "Speech": quiet bursts of a tone, with a 3-second pause from 2 s to
+      // 5 s, over a room's pink noise.
+      const noisy = path.join(dir, 'noisy.wav');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        "aevalsrc='0.1*sin(2*PI*300*t)*lt(mod(t,0.3),0.2)*(lt(t,2)+gte(t,5))':s=44100:d=7",
+        '-f',
+        'lavfi',
+        '-i',
+        'anoisesrc=c=pink:a=0.01:r=44100:d=7',
+        '-filter_complex',
+        '[0][1]amix=inputs=2:normalize=0',
+        '-c:a',
+        'pcm_s16le',
+        noisy,
+      ]);
+      // A steady, quiet tune with no pauses, cover art and a title.
+      const tone = path.join(dir, 'tone.mp3');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=4:sample_rate=44100',
+        '-af',
+        'volume=0.05',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '128k',
+        tone,
+      ]);
+      const art = path.join(dir, 'cover.jpg');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'color=red:size=64x64',
+        '-frames:v',
+        '1',
+        art,
+      ]);
+      const song = path.join(dir, 'song.mp3');
+      ffmpegOk([
+        '-i',
+        tone,
+        '-i',
+        art,
+        '-map',
+        '0',
+        '-map',
+        '1',
+        '-c',
+        'copy',
+        '-disposition:v',
+        'attached_pic',
+        '-metadata',
+        'title=Song',
+        song,
+      ]);
+      const wma = path.join(dir, 'talk.wma');
+      ffmpegOk(['-i', noisy, '-c:a', 'wmav2', wma]);
+      const silent = path.join(dir, 'silent.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=160x120:rate=10',
+        '-c:v',
+        'mpeg4',
+        silent,
+      ]);
+
+      /** What FFmpeg prints for `filter` run over `file`. */
+      const measure = (file: string, filter: string) =>
+        String(
+          spawnSync(vendorFfmpeg, [
+            '-hide_banner',
+            '-nostats',
+            '-i',
+            file,
+            '-af',
+            filter,
+            '-f',
+            'null',
+            '-',
+          ]).stderr,
+        );
+      /** Integrated loudness, LUFS: the summary, after a line per frame. */
+      const loudnessOf = (file: string) =>
+        Number(
+          [...measure(file, 'ebur128').matchAll(/I:\s+(-?[\d.]+) LUFS/g)].at(
+            -1,
+          )?.[1],
+        );
+      /** RMS level from `from` to `to` seconds, dBFS. */
+      const levelOf = (file: string, from: number, to: number) =>
+        Number(
+          /RMS level dB: (-?[\d.]+)/.exec(
+            measure(
+              file,
+              `atrim=${from}:${to},astats=measure_perchannel=none:measure_overall=RMS_level`,
+            ),
+          )?.[1],
+        );
+      const probe = (file: string) =>
+        JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'format=duration:format_tags=title:stream=codec_type,codec_name,sample_rate:stream_disposition=attached_pic',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          format: { duration: string; tags?: { title?: string } };
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            sample_rate?: string;
+            disposition?: { attached_pic?: number };
+          }[];
+        };
+
+      const tools = queue({ 'clean-up-audio': cleanUpAudio });
+      const made: string[] = [];
+      const clean = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('clean-up-audio', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        const out = done.outputs[0] ? path.join(outDir(), done.outputs[0]) : '';
+        return { ...done, out };
+      };
+
+      // Everything on: the pause is cut to 0.7 s, the rest made -16 LUFS,
+      // still a 44.1 kHz 16-bit WAV.
+      const all = await clean(noisy, {
+        reduceNoise: true,
+        normalizeVolume: true,
+        removeSilence: true,
+      });
+      assert.equal(all.status, 'done', all.error ?? '');
+      assert.deepEqual(all.outputs, ['noisy-clean.wav']);
+      const allProbe = probe(all.out);
+      assert.ok(
+        Math.abs(Number(allProbe.format.duration) - 4.7) < 0.3,
+        allProbe.format.duration,
+      );
+      assert.deepEqual(
+        [allProbe.streams[0].codec_name, allProbe.streams[0].sample_rate],
+        ['pcm_s16le', '44100'],
+      );
+      assert.ok(
+        Math.abs(loudnessOf(all.out) + 16) < 1,
+        `${loudnessOf(all.out)}`,
+      );
+      assert.match(all.note ?? '', /Pauses shortened: 7 s → 4\.\d s\./);
+
+      // One bar over three passes, every report seen (the queue passes on
+      // only a few a second): never backwards, and full at the end, though
+      // the cleaned sound is shorter than the file.
+      const ffmpeg = resolveFfmpeg(vendorStore(path.join(tmp, 'toolkits')))!;
+      const reports: number[] = [];
+      const traced = path.join(dir, 'traced.wav');
+      await cleanUpAudio.run({
+        input: noisy,
+        inputs: [noisy],
+        values: {
+          reduceNoise: true,
+          normalizeVolume: true,
+          removeSilence: true,
+        },
+        signal: new AbortController().signal,
+        progress: (percent) => void (percent !== null && reports.push(percent)),
+        note: () => {},
+        outputPath: () => traced,
+        ffmpeg: () => ffmpeg,
+        run: runProgram,
+      });
+      assert.ok(
+        reports.every((value, i) => i === 0 || value >= reports[i - 1]),
+        reports.join(),
+      );
+      assert.ok(reports.some((value) => value > 15 && value < 25));
+      assert.ok(reports.some((value) => value > 55 && value < 65));
+      assert.equal(reports.at(-1), 100, reports.join());
+      rmSync(traced);
+
+      // Reduce Noise alone: the pause is much quieter, the tone isn't, and
+      // the length is kept.
+      const denoised = await clean(noisy, {
+        reduceNoise: true,
+        normalizeVolume: false,
+        removeSilence: false,
+      });
+      assert.equal(denoised.status, 'done', denoised.error ?? '');
+      assert.ok(
+        Math.abs(Number(probe(denoised.out).format.duration) - 7) < 0.05,
+      );
+      const pause = [levelOf(noisy, 2.5, 4.5), levelOf(denoised.out, 2.5, 4.5)];
+      assert.ok(pause[0] - pause[1] > 8, pause.join(' → '));
+      const bursts = [levelOf(noisy, 0, 2), levelOf(denoised.out, 0, 2)];
+      assert.ok(Math.abs(bursts[0] - bursts[1]) < 1.5, bursts.join(' → '));
+      assert.equal(denoised.note, undefined);
+
+      // An MP3 stays an MP3 at its rate, with its cover art and title; a
+      // steady tune isn't taken for noise, and has no pauses to cut.
+      const tune = await clean(song, {
+        reduceNoise: true,
+        normalizeVolume: true,
+        removeSilence: true,
+      });
+      assert.equal(tune.status, 'done', tune.error ?? '');
+      assert.deepEqual(tune.outputs, ['song-clean.mp3']);
+      const tuneProbe = probe(tune.out);
+      assert.deepEqual(
+        tuneProbe.streams.map((s) => [
+          s.codec_name,
+          s.disposition?.attached_pic ?? 0,
+        ]),
+        [
+          ['mp3', 0],
+          ['mjpeg', 1],
+        ],
+      );
+      assert.equal(tuneProbe.streams[0].sample_rate, '44100');
+      assert.equal(tuneProbe.format.tags?.title, 'Song');
+      assert.ok(Math.abs(Number(tuneProbe.format.duration) - 4) < 0.1);
+      assert.ok(
+        Math.abs(loudnessOf(tune.out) + 16) < 1,
+        `${loudnessOf(tune.out)}`,
+      );
+      assert.equal(tune.note, 'It had no long pauses to shorten.');
+      const kept = await clean(song, {
+        reduceNoise: true,
+        normalizeVolume: false,
+        removeSilence: false,
+      });
+      const music = [levelOf(song, 0.5, 3.5), levelOf(kept.out, 0.5, 3.5)];
+      assert.ok(Math.abs(music[0] - music[1]) < 2, music.join(' → '));
+
+      // WMA, which Offlane can't make, comes out as M4A, and says so.
+      const talk = await clean(wma, { removeSilence: false });
+      assert.equal(talk.status, 'done', talk.error ?? '');
+      assert.deepEqual(talk.outputs, ['talk-clean.m4a']);
+      assert.equal(probe(talk.out).streams[0].codec_name, 'aac');
+      assert.match(talk.note ?? '', /Saved as M4A/);
+
+      // Nothing to do, or no sound, fails with why.
+      const nothing = await clean(noisy, {
+        reduceNoise: false,
+        normalizeVolume: false,
+        removeSilence: false,
+      });
+      assert.equal(nothing.status, 'failed');
+      assert.match(nothing.error ?? '', /Turn on/);
+      const mute = await clean(silent, {});
+      assert.equal(mute.status, 'failed');
+      assert.match(mute.error ?? '', /no sound to clean up/);
+
+      for (const name of made) rmSync(path.join(outDir(), name));
     },
   );
 });

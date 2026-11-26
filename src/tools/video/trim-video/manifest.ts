@@ -1,4 +1,4 @@
-import { Scissors, defineTool } from '../../ui';
+import { Scissors, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

@@ -1,4 +1,4 @@
-import { Minimize2, defineTool } from '../../ui';
+import { Minimize2, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

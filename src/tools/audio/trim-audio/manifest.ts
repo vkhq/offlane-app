@@ -1,4 +1,4 @@
-import { AudioLines, defineTool } from '../../ui';
+import { AudioLines, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

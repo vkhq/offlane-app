@@ -136,7 +136,7 @@ function StepCard({ step }: { step: Step }) {
     });
 
   const run = async () => {
-    if (!config || !values) return;
+    if (!config || !values || config.blocked?.(values)) return;
     if (!connected) {
       setNotice(`${config.action} isn't connected yet.`);
       return;

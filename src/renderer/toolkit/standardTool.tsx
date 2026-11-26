@@ -1,6 +1,6 @@
 import { type ComponentType, useEffect, useState } from 'react';
 
-import type { Options, SettingValue } from '../../shared/tools';
+import type { Options, OptionValues, SettingValue } from '../../shared/tools';
 import { addActivity } from '../history';
 import type { MediaRef, SavedFile, SessionStatus } from '../../shared/types';
 import { savedFileOf, useSession } from '../sessions';
@@ -44,6 +44,12 @@ export type StandardTool<O extends Options> = {
    * once the tool has run, as the result is then there to see.
    */
   preview?: { label: string; view: ComponentType<ToolPreviewProps> };
+  /**
+   * Why the tool can't run with these values, or null when it can: the
+   * button is held and the reason shown under it, as Clean Up Audio does
+   * with every cleaning step turned off.
+   */
+  blocked?: (values: OptionValues<O>) => string | null;
 };
 
 /** What a tool's preview step (see StandardTool.preview) is given. */
@@ -202,7 +208,7 @@ export function standardTool<O extends Options>(
       );
 
     const run = async () => {
-      if (!ready || locked) return;
+      if (!ready || locked || config.blocked?.(values)) return;
       const links =
         input.kind === 'link'
           ? [toLink(link)]

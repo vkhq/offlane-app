@@ -1,4 +1,4 @@
-import { Crop, defineTool } from '../../ui';
+import { Crop, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

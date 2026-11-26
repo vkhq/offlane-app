@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { RotateCw, defineTool } from '../../ui';
+import { RotateCw, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

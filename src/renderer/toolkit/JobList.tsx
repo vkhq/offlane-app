@@ -15,6 +15,7 @@ import { formatBytes } from '../downloads';
 import { tools } from '../tools';
 import type { FlowTone } from './Flow';
 import { useToolJobs } from './jobs';
+import { AudioPlayer } from './AudioPlayer';
 import { toolFile } from './PlayerModal';
 import { ResultCard, revealLabel } from './ResultCard';
 import { Results } from './Results';
@@ -166,7 +167,7 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
   }, [api, done, job.id]);
   // A GIF plays too, in the GIF player.
   const gif = done && /\.gif$/i.test(name);
-  const playable = done && (kind === 'video' || kind === 'audio' || gif);
+  const playable = done && (kind === 'video' || gif);
 
   const details = done
     ? [
@@ -182,6 +183,19 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
         .join(' · ')
     : describe(job);
 
+  // A finished sound is its own player, in place of the card.
+  if (done && kind === 'audio') {
+    return (
+      <AudioPlayer
+        file={toolFile(job.id)}
+        title={name}
+        details={details}
+        next={next}
+        onMenu={() => void jobMenu(job, false, () => {})}
+      />
+    );
+  }
+
   return (
     <ResultCard
       thumbnail={preview?.thumbnail}
@@ -196,8 +210,6 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
           ? {
               file: toolFile(job.id),
               title: name,
-              audio: kind === 'audio',
-              poster: preview?.thumbnail ?? undefined,
               ...(gif && { gif: () => api.gifBytes(job.id) }),
             }
           : undefined

@@ -10,7 +10,11 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { PlaybackProgress, PlaybackSource } from '../../shared/types';
+import type {
+  MediaRef,
+  PlaybackProgress,
+  PlaybackSource,
+} from '../../shared/types';
 import {
   Captions,
   Languages,
@@ -28,24 +32,27 @@ import {
   Seek,
 } from './playerIcons';
 
-type State =
+/** Where readying a file to play has got to. */
+export type PlaybackState =
   | {
       kind: 'preparing';
       stage: 'remux' | 'transcode' | null;
       percent: number | null;
+      /** Width over height, once the main process has looked. */
+      aspect?: number;
     }
   | { kind: 'ready'; url: string; source: PlaybackSource }
   | { kind: 'failed'; message: string };
 
-const revealLabel = navigator.userAgent.includes('Mac')
+export const revealLabel = navigator.userAgent.includes('Mac')
   ? 'Show in Finder'
   : 'Show in Folder';
 
 /** How long the pointer may rest before the controls fade, while playing. */
 const idleAfter = 2500;
-const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
+export const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
 /** How far the skip buttons and keys move. */
-const step = 15;
+export const step = 15;
 
 /**
  * A finished download, played over the page at 80% of the window: 16:9
@@ -73,6 +80,8 @@ const step = 15;
  */
 export type PlayerFile = {
   id: string;
+  /** The same file for `window.media`, for its waveform. */
+  media?: MediaRef;
   prepare: (audioTrack?: number) => Promise<PlaybackSource>;
   cancel: () => void;
   onProgress: (cb: (progress: PlaybackProgress) => void) => () => void;
@@ -83,6 +92,7 @@ export type PlayerFile = {
 /** A finished download, for the player. */
 export const downloadFile = (id: string): PlayerFile => ({
   id,
+  media: { source: 'download', jobId: id, index: 0 },
   prepare: (track) => window.downloader.preparePlayback(id, track),
   cancel: () => void window.downloader.cancelPlayback(id),
   onProgress: (cb) => window.downloader.onPlaybackProgress(cb),
@@ -93,6 +103,7 @@ export const downloadFile = (id: string): PlayerFile => ({
 /** A tool's finished output, for the player. */
 export const toolFile = (id: string): PlayerFile => ({
   id,
+  media: { source: 'tool', jobId: id, index: 0 },
   prepare: (track) => window.tools.preparePlayback(id, track),
   cancel: () => void window.tools.cancelPlayback(id),
   onProgress: (cb) => window.tools.onPlaybackProgress(cb),
@@ -100,29 +111,83 @@ export const toolFile = (id: string): PlayerFile => ({
   reveal: () => void window.tools.reveal(id),
 });
 
-export function PlayerModal({
-  file,
-  audio = false,
-  title,
-  poster,
-  onClose,
-}: {
-  file: PlayerFile;
-  /** Sound only: no picture, so its poster shows while it plays. */
-  audio?: boolean;
-  title: string;
-  /** The video's thumbnail, shown behind an audio file while it plays. */
-  poster?: string;
-  onClose: () => void;
-}) {
+/**
+ * Readies `file` to play: most play at once, an MKV is rewrapped and a
+ * stream Chromium can't decode is re-encoded, with its progress. Stops
+ * readying it when the player closes first.
+ */
+export function usePlayback(file: PlayerFile) {
   // The latest, for effects that run once per file.
   const latest = useRef(file);
   latest.current = file;
-  const [state, setState] = useState<State>({
+  const [state, setState] = useState<PlaybackState>({
     kind: 'preparing',
     stage: null,
     percent: null,
   });
+
+  useEffect(() => {
+    let live = true;
+    const onProgress = (progress: PlaybackProgress) => {
+      if (live && progress.id === file.id) {
+        setState({
+          kind: 'preparing',
+          stage: progress.stage,
+          percent: progress.percent,
+          aspect: progress.aspect ?? undefined,
+        });
+      }
+    };
+    // Progress is only a nicety: without it, it still plays (or says why
+    // it can't, below).
+    let off = () => {};
+    try {
+      off = file.onProgress(onProgress);
+    } catch {
+      // No progress to show.
+    }
+    // Run in a promise, so even a failure before it gets going (a call the
+    // app doesn't have) shows as the player's own error, not a dead click.
+    Promise.resolve()
+      .then(() => file.prepare())
+      .then(
+        (source) => {
+          if (live) setState({ kind: 'ready', url: source.url, source });
+        },
+        (error: unknown) => {
+          if (!live) return;
+          setState({
+            kind: 'failed',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
+    return () => {
+      live = false;
+      off();
+      // Nothing to stop once it plays; the main process ignores it then.
+      try {
+        latest.current.cancel();
+      } catch {
+        // Nothing to stop.
+      }
+    };
+    // Once per file, whichever object names it.
+  }, [file.id]);
+
+  return [state, setState] as const;
+}
+
+export function PlayerModal({
+  file,
+  title,
+  onClose,
+}: {
+  file: PlayerFile;
+  title: string;
+  onClose: () => void;
+}) {
+  const [state, setState] = usePlayback(file);
   const frame = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
 
@@ -153,60 +218,14 @@ export function PlayerModal({
   /** True while the pointer is over the panel, which then stays. */
   const overPanel = useRef(false);
 
+  // The frame takes the video's shape as soon as it is known.
   useEffect(() => {
-    let live = true;
-    const onProgress = (progress: PlaybackProgress) => {
-      if (live && progress.id === file.id) {
-        setState({
-          kind: 'preparing',
-          stage: progress.stage,
-          percent: progress.percent,
-        });
-        if (progress.aspect) setRatio(progress.aspect);
-      }
-    };
-    // Progress is only a nicety: without it, it still plays (or says why
-    // it can't, below).
-    let off = () => {};
-    try {
-      off = file.onProgress(onProgress);
-    } catch {
-      // No progress to show.
+    if (state.kind === 'preparing' && state.aspect) setRatio(state.aspect);
+    if (state.kind === 'ready' && state.source.aspect) {
+      setRatio(state.source.aspect);
     }
-    // Run in a promise, so even a failure before it gets going (a call the
-    // app doesn't have) shows as the player's own error, not a dead click.
-    Promise.resolve()
-      .then(() => file.prepare())
-      .then(
-        (source) => {
-          if (!live) return;
-          // Audio has no picture: it shows its poster at 16:9. A video whose
-          // shape can't be told waits for its own metadata.
-          if (source.aspect) setRatio(source.aspect);
-          else if (audio) setRatio(16 / 9);
-          setState({ kind: 'ready', url: source.url, source });
-        },
-        (error: unknown) => {
-          if (!live) return;
-          setRatio((current) => current ?? 16 / 9);
-          setState({
-            kind: 'failed',
-            message: error instanceof Error ? error.message : String(error),
-          });
-        },
-      );
-    return () => {
-      live = false;
-      off();
-      // Nothing to stop once it plays; the main process ignores it then.
-      try {
-        latest.current.cancel();
-      } catch {
-        // Nothing to stop.
-      }
-    };
-    // Once per file, whichever object names it.
-  }, [file.id, audio]);
+    if (state.kind === 'failed') setRatio((current) => current ?? 16 / 9);
+  }, [state]);
 
   const source = state.kind === 'ready' ? state.source : null;
   const subtitles = source?.subtitles ?? [];
@@ -479,7 +498,6 @@ export function PlayerModal({
           <video
             ref={video}
             src={state.url}
-            poster={audio ? poster : undefined}
             autoPlay
             playsInline
             onClick={toggle}
@@ -593,7 +611,7 @@ export function PlayerModal({
                 time={time}
                 duration={duration}
                 buffered={buffered}
-                preview={audio ? undefined : state.url}
+                preview={state.url}
                 ratio={ratio}
                 onSeek={(to) => {
                   if (video.current) video.current.currentTime = to;
@@ -618,34 +636,32 @@ export function PlayerModal({
                   <Seek size={26} seconds={step} forward />
                 </Control>
                 <span className="flex-1" />
-                {/* Always there for a video, so it's plain when a file
-                    has none, rather than missing. */}
-                {!audio && (
-                  <Control
-                    label={
-                      subtitles.length === 0
-                        ? 'No subtitles in this file'
-                        : subtitles.length > 1
-                          ? 'Subtitles (C)'
-                          : subtitle === -1
-                            ? 'Show Subtitles (C)'
-                            : 'Hide Subtitles (C)'
-                    }
-                    disabled={subtitles.length === 0}
-                    onClick={() => void openSubtitles()}
-                  >
-                    <Captions
-                      size={24}
-                      filled={subtitles.length > 0 && subtitle !== -1}
-                    />
-                  </Control>
-                )}
+                {/* Always there, so it's plain when a file has none,
+                    rather than missing. */}
+                <Control
+                  label={
+                    subtitles.length === 0
+                      ? 'No subtitles in this file'
+                      : subtitles.length > 1
+                        ? 'Subtitles (C)'
+                        : subtitle === -1
+                          ? 'Show Subtitles (C)'
+                          : 'Hide Subtitles (C)'
+                  }
+                  disabled={subtitles.length === 0}
+                  onClick={() => void openSubtitles()}
+                >
+                  <Captions
+                    size={24}
+                    filled={subtitles.length > 0 && subtitle !== -1}
+                  />
+                </Control>
                 {audioTracks.length > 1 && (
                   <Control label="Audio" onClick={() => void openAudio()}>
                     <Languages size={24} />
                   </Control>
                 )}
-                {document.pictureInPictureEnabled && !audio && (
+                {document.pictureInPictureEnabled && (
                   <Control label="Picture in Picture" onClick={togglePip}>
                     <PictureInPicture size={26} />
                   </Control>
@@ -925,7 +941,7 @@ function Failed({
 }
 
 /** Seconds as 1:02:32, or 2:32 when the whole video is under an hour. */
-function clock(seconds: number, total: number) {
+export function clock(seconds: number, total: number) {
   const value = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   const pad = (part: number) => String(part).padStart(2, '0');
   const hours = Math.floor(value / 3600);

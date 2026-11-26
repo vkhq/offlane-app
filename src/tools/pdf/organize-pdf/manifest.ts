@@ -1,4 +1,4 @@
-import { LayoutGrid, defineTool } from '../../ui';
+import { LayoutGrid, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

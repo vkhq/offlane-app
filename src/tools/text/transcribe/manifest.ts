@@ -1,4 +1,4 @@
-import { Captions, defineTool } from '../../ui';
+import { Captions, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

@@ -21,10 +21,13 @@ npm run new-tool -- <group> <tool-id> "<Name>" [--handler]
 
 ## The rules
 
-- **A tool imports only from its own folder and from `../../ui` (pages,
-  manifest), `../../options` (options) or `../../backend` (handler).** It never
-  imports from another tool, and the app never imports a tool's folder. Lint
-  enforces both (see `.oxlintrc.json`). Anything two tools need goes into the
+- **A tool imports only from its own folder and from `../../ui` (pages),
+  `../../manifest` (manifest), `../../options` (options) or `../../backend`
+  (handler).** It never imports from another tool, and the app never imports
+  a tool's folder. Lint enforces both (see `.oxlintrc.json`). A manifest
+  never imports `../../ui`: the registry loads every manifest as it starts,
+  and `ui` reaches components that import the registry back, which breaks
+  hot reloading. Anything two tools need goes into the
   toolkit (`src/renderer/toolkit`, or `src/tools/backend.ts`).
 - **The folder's name is the tool's id and its route** (`/compress-video`).
   The group is the parent folder, which must be listed in `groups.ts`.

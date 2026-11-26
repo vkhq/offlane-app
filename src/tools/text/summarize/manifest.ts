@@ -1,4 +1,4 @@
-import { TextQuote, defineTool } from '../../ui';
+import { TextQuote, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

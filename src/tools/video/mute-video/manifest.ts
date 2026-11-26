@@ -1,4 +1,4 @@
-import { VolumeX, defineTool } from '../../ui';
+import { VolumeX, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

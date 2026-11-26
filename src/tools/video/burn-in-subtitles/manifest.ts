@@ -1,4 +1,4 @@
-import { MessageSquareText, defineTool } from '../../ui';
+import { MessageSquareText, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

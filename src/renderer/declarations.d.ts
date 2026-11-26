@@ -23,6 +23,9 @@ interface Window {
     userName: () => Promise<string>;
     /** This app's version, from package.json. */
     version: () => Promise<string>;
+    /** Says whether a tool's canvas is on screen: while one is, Cmd +, −
+     *  and 0 zoom it rather than the whole app. */
+    setCanvasShown: (shown: boolean) => void;
     /** Shows a native menu at the pointer; resolves to the chosen id. */
     contextMenu: (lines: MenuLine[]) => Promise<string | null>;
   };

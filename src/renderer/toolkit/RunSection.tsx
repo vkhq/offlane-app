@@ -81,6 +81,8 @@ export function RunSection<O extends Options>({
   media?: MediaRef | null;
 }) {
   const { options, action, preview } = config;
+  // Values it can't run with hold the button, saying why.
+  const blocked = locked ? null : (config.blocked?.(values) ?? null);
   const Preview = preview?.view;
   const hasOptions = Object.keys(options).some((key) =>
     inBar(options, key, values),
@@ -105,7 +107,7 @@ export function RunSection<O extends Options>({
               onChange={onChange}
               onFile={onFile}
               action={label}
-              busy={busy}
+              busy={busy || blocked !== null}
               disabled={locked}
               onRun={onRun}
               // What it will make, before the button that makes it; gone
@@ -124,7 +126,7 @@ export function RunSection<O extends Options>({
                 )
               }
             />
-            <FlowNotice>{notice}</FlowNotice>
+            <FlowNotice>{notice || blocked}</FlowNotice>
           </FlowNode>
         </>
       )}

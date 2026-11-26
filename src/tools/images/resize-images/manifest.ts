@@ -1,4 +1,4 @@
-import { MoveDiagonal2, defineTool } from '../../ui';
+import { MoveDiagonal2, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

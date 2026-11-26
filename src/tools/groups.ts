@@ -1,4 +1,4 @@
-import { FilePdf, Folder, Image, Music, TextSquare, Video } from './ui';
+import { FilePdf, Folder, Image, Music, TextSquare, Video } from './manifest';
 
 /**
  * The tool groups, in the order the app lists them. A tool's group is the

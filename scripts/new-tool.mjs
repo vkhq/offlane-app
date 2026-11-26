@@ -41,7 +41,7 @@ const write = (file, text) => writeFileSync(path.join(dir, file), spdx + text);
 
 write(
   'manifest.ts',
-  `import { WandSparkles, defineTool } from '../../ui';
+  `import { WandSparkles, defineTool } from '../../manifest';
 
 export default defineTool({
   id: '${id}',

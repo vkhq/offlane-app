@@ -162,6 +162,19 @@ export async function probeMedia(
   };
 }
 
+/** More of what `runFfmpeg` can do, for a tool that runs FFmpeg more than
+ *  once or reads what it prints. */
+export type FfmpegRunOptions = {
+  /** The part of the job's progress bar this run fills, in percent:
+   *  [0, 50] for the first of two equal passes. The whole bar by default. */
+  span?: [number, number];
+  /** Every line FFmpeg writes to stdout (after its own progress lines are
+   *  read), such as a filter's `file=-` output. */
+  onStdout?: (line: string) => void;
+  /** Every line FFmpeg writes to stderr, such as a filter's measurements. */
+  onStderr?: (line: string) => void;
+};
+
 /**
  * Runs FFmpeg with `args` (which should not include -progress), reporting
  * progress against `duration` seconds. Throws with FFmpeg's last error line
@@ -171,7 +184,9 @@ export async function runFfmpeg(
   context: HandlerContext<unknown>,
   args: string[],
   duration: number | null,
+  { span = [0, 100], onStdout, onStderr }: FfmpegRunOptions = {},
 ) {
+  const [from, to] = span;
   const { ffmpeg } = context.ffmpeg();
   const result = await context.run(
     ffmpeg,
@@ -189,9 +204,12 @@ export async function runFfmpeg(
       onStdout: (line) => {
         const match = /^out_time_us=(\d+)/.exec(line);
         if (match && duration) {
-          context.progress((Number(match[1]) / 1e6 / duration) * 100);
+          const done = Math.min(1, Number(match[1]) / 1e6 / duration);
+          context.progress(from + done * (to - from));
         }
+        onStdout?.(line);
       },
+      onStderr,
     },
   );
   if (result.killed) return;
@@ -314,6 +332,123 @@ export async function audioArgs(
       throw new Error(
         `Offlane can't make ${format || 'that kind of'} audio files.`,
       );
+  }
+}
+
+/** Bits per second a lossy re-encode keeps from its source: the audio
+ *  stream's, else the file's, within 64–320 kbps; 192 kbps if unknown. */
+const sourceAudioKbps = (media: MediaInfo) =>
+  Math.min(
+    320,
+    Math.max(
+      64,
+      Math.round((media.audio?.bitrate ?? media.bitrate ?? 192_000) / 1000),
+    ),
+  );
+
+/** Uncompressed sample formats kept as they are, by container. */
+const keptPcm = {
+  wav: ['pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le', 'pcm_u8'],
+  aiff: ['pcm_s16be', 'pcm_s24be', 'pcm_s32be', 'pcm_f32be'],
+};
+
+/**
+ * The output arguments that re-encode a file's sound in the format it came
+ * in, for a tool that changes the sound and should hand back the same kind
+ * of file (Clean Up Audio, Trim Audio): the same container (by `input`'s
+ * extension) and codec, at the source's bitrate and sample rate, with any
+ * cover art and tags. A format Offlane can't make (WMA) comes out as M4A,
+ * and `note` says so.
+ *
+ * `args` holds the maps (the first audio stream, and cover art where the
+ * container keeps it), so add only the filters and the output path, which
+ * ends in `ext`.
+ */
+export async function sameAudioFormat(
+  context: HandlerContext<unknown>,
+  input: string,
+  media: MediaInfo,
+): Promise<{ ext: string; args: string[]; note: string | null }> {
+  const { ffmpeg } = context.ffmpeg();
+  const from = /\.([^./\\]+)$/.exec(input)?.[1]?.toLowerCase() ?? '';
+  const codec = media.audio?.codec ?? '';
+  const kbps = sourceAudioKbps(media);
+  // Filters such as loudnorm change the rate, so it is always set.
+  const rate = (hz = media.audio?.sampleRate ?? 48_000) => ['-ar', String(hz)];
+  const sound = ['-map', '0:a:0'];
+  // An audio file's only pictures are its cover art (probeMedia leaves
+  // them out of `video`); a real video track isn't kept.
+  const cover = media.video
+    ? []
+    : ['-map', '0:v?', '-c:v', 'copy', '-disposition:v', 'attached_pic'];
+  const made = (ext: string, args: string[], withCover = false) => ({
+    ext,
+    args: [...sound, ...(withCover ? cover : []), ...args],
+    note: null,
+  });
+  const pcm = (kept: string[], fallback: string) =>
+    kept.includes(codec) ? codec : fallback;
+  const opus = async () =>
+    pickEncoder(ffmpeg, ['libopus'], "This FFmpeg can't make Opus files.");
+
+  switch (from) {
+    case 'mp3':
+      return made(
+        'mp3',
+        [...(await audioArgs(context, 'MP3', kbps)).args, ...rate()],
+        true,
+      );
+    case 'm4a':
+      return made(
+        'm4a',
+        codec === 'alac'
+          ? ['-c:a', 'alac', ...rate()]
+          : [...(await audioArgs(context, 'M4A', kbps)).args, ...rate()],
+        true,
+      );
+    case 'aac':
+      return made('aac', [
+        '-c:a',
+        await pickAacEncoder(ffmpeg),
+        '-b:a',
+        `${kbps}k`,
+        ...rate(),
+      ]);
+    case 'wav':
+      return made('wav', ['-c:a', pcm(keptPcm.wav, 'pcm_s16le'), ...rate()]);
+    case 'aiff':
+    case 'aif':
+      return made(from, ['-c:a', pcm(keptPcm.aiff, 'pcm_s16be'), ...rate()]);
+    case 'flac':
+      return made('flac', ['-c:a', 'flac', ...rate()], true);
+    case 'ogg':
+      return made(
+        'ogg',
+        codec === 'opus'
+          ? ['-c:a', await opus(), '-b:a', `${kbps}k`, ...rate(48_000)]
+          : [...(await audioArgs(context, 'OGG', kbps)).args, ...rate()],
+      );
+    case 'opus':
+      // Opus is always 48 kHz inside.
+      return made('opus', [
+        '-c:a',
+        await opus(),
+        '-b:a',
+        `${kbps}k`,
+        ...rate(48_000),
+      ]);
+    default: {
+      const m4a = made(
+        'm4a',
+        [...(await audioArgs(context, 'M4A', kbps)).args, ...rate()],
+        true,
+      );
+      const name = from ? from.toUpperCase() : 'this kind of';
+      return {
+        ...m4a,
+        note: `Saved as M4A, as Offlane can’t make ${name} files.`,
+      };
+    }
   }
 }
 

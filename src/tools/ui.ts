@@ -73,6 +73,8 @@ export {
   toolFile,
   type PlayerFile,
 } from '../renderer/toolkit/PlayerModal';
+// A finished sound's result card, which plays it in place.
+export { AudioPlayer } from '../renderer/toolkit/AudioPlayer';
 
 // A round checkbox for picking among thumbnails.
 export { RoundCheckbox } from '../renderer/toolkit/RoundCheckbox';

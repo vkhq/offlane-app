@@ -1,4 +1,4 @@
-import { CircleArrowDown, defineTool } from '../../ui';
+import { CircleArrowDown, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

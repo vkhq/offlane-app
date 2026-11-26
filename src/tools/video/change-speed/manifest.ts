@@ -1,4 +1,4 @@
-import { Gauge, defineTool } from '../../ui';
+import { Gauge, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

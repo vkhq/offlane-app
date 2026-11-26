@@ -1,4 +1,4 @@
-import { ScanText, defineTool } from '../../ui';
+import { ScanText, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

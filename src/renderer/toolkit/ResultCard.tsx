@@ -9,9 +9,6 @@ import { type PlayerFile, PlayerModal } from './PlayerModal';
 export type Playable = {
   file: PlayerFile;
   title: string;
-  /** Sound only: its poster shows behind it while it plays. */
-  audio?: boolean;
-  poster?: string;
   /** A GIF: its bytes, for the GIF player (see GifView), which shows it
    *  in place of the video player. */
   gif?: () => Promise<Uint8Array>;
@@ -127,11 +124,7 @@ export function ResultCard({
             onClick={start}
             className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full bg-ink text-canvas hover:opacity-90"
           >
-            <Play
-              size={14}
-              filled={!play.audio}
-              className={play.audio ? '' : 'translate-x-px'}
-            />
+            <Play size={14} filled className="translate-x-px" />
           </button>
         ) : (
           action && (
@@ -167,9 +160,7 @@ export function ResultCard({
       {playing && play && !play.gif && (
         <PlayerModal
           file={play.file}
-          audio={play.audio}
           title={play.title}
-          poster={play.poster}
           onClose={() => setPlaying(false)}
         />
       )}

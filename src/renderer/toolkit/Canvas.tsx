@@ -131,12 +131,37 @@ const typing = (target: EventTarget | null) =>
   (target.isContentEditable ||
     /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName));
 
+/** How many canvases are on screen. Counted, as a tab's new page can mount
+ *  before the old one's unmounts. */
+let canvasesShown = 0;
+
+/** Which zoom a key is, by the character it types or its key on the board:
+ *  + (or =, unshifted), − and 0, on either row or the number pad. */
+function zoomKeyAction(event: KeyboardEvent) {
+  if (
+    ['+', '='].includes(event.key) ||
+    ['Equal', 'NumpadAdd'].includes(event.code)
+  ) {
+    return 'zoomIn' as const;
+  }
+  if (
+    ['-', '_'].includes(event.key) ||
+    ['Minus', 'NumpadSubtract'].includes(event.code)
+  ) {
+    return 'zoomOut' as const;
+  }
+  if (event.key === '0' || ['Digit0', 'Numpad0'].includes(event.code)) {
+    return 'reset' as const;
+  }
+  return null;
+}
+
 /**
  * A tool page's canvas, as in a design tool: its content (the page's
  * stages, branching out below one another) sits on a dotted board that
  * pans with two fingers on a trackpad (or the wheel, or by dragging an
  * empty part of it, or anywhere with Space held) and zooms with a pinch
- * or its zoom buttons. It pans only as far as there is content to see:
+ * or its zoom buttons, or Cmd +, − and 0. It pans only as far as there is content to see:
  * while it all fits, it stays put, like a page. Where it was panned to is
  * kept with its tab.
  */
@@ -273,6 +298,35 @@ export function Canvas({ children }: { children: ReactNode }) {
     };
     view.addEventListener('scroll', onScroll);
     return () => view.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Cmd +, − and 0 (Ctrl elsewhere) zoom the canvas while it is on screen,
+  // as its corner buttons do; the main process then holds them back from
+  // the View menu, which zooms the whole app on any other page.
+  const zoomKeys = useRef({
+    zoomIn: () => {},
+    zoomOut: () => {},
+    reset: () => {},
+  });
+  useEffect(() => {
+    canvasesShown += 1;
+    window.app.setCanvasShown(true);
+    const down = (event: KeyboardEvent) => {
+      const mac = navigator.userAgent.includes('Mac');
+      if (!(mac ? event.metaKey : event.ctrlKey) || event.altKey) return;
+      // Not under the player or a menu drawn over it.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const action = zoomKeyAction(event);
+      if (!action) return;
+      event.preventDefault();
+      zoomKeys.current[action]();
+    };
+    window.addEventListener('keydown', down);
+    return () => {
+      window.removeEventListener('keydown', down);
+      canvasesShown -= 1;
+      window.app.setCanvasShown(canvasesShown > 0);
+    };
   }, []);
 
   // Space held grabs the canvas anywhere, as in a design tool.
@@ -438,6 +492,11 @@ export function Canvas({ children }: { children: ReactNode }) {
   };
 
   const z = camera?.z ?? 1;
+  zoomKeys.current = {
+    zoomIn: () => zoomBy(1.25),
+    zoomOut: () => zoomBy(1 / 1.25),
+    reset: () => zoomBy(1 / z),
+  };
   // The dots move and scale with the content, as on a design tool's board,
   // every other one dropping out as it zooms out, so they never crowd.
   let dot = 20 * z;

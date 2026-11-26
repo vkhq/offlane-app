@@ -1,4 +1,4 @@
-import { AudioWaveform, defineTool } from '../../ui';
+import { AudioWaveform, defineTool } from '../../manifest';
 import banner from './banner.webp';
 
 export default defineTool({

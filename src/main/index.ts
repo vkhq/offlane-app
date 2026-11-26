@@ -270,6 +270,12 @@ function allowMicrophoneOnly() {
   );
 }
 
+/** Whether a tool's canvas is on screen, so Cmd +, − and 0 go to it. */
+let canvasShown = false;
+ipcMain.on('canvas-shown', (_event, shown: unknown) => {
+  canvasShown = shown === true;
+});
+
 const createWindow = (): void => {
   // In development (`npm start`) the window opens maximized, filling the
   // screen the pointer is on: created at that size, so it doesn't open small
@@ -324,10 +330,30 @@ const createWindow = (): void => {
   // keys first. Hide stays in the app menu, and Cmd+Option+H still hides the
   // other apps.
   const pageKeys = ['KeyW', 'KeyH', 'Comma'];
+  // Cmd +, − and 0 are the page's too while a tool's canvas is on screen,
+  // which zooms with them; on any other page the View menu zooms the app.
+  const zoomKeys = ['+', '=', '-', '_', '0'];
+  const zoomCodes = [
+    'Equal',
+    'Minus',
+    'Digit0',
+    'NumpadAdd',
+    'NumpadSubtract',
+    'Numpad0',
+  ];
+  // A reload starts with no canvas until the page says it shows one.
+  window.webContents.on('did-start-loading', () => {
+    canvasShown = false;
+  });
   window.webContents.on('before-input-event', (_event, input) => {
     const modifier = process.platform === 'darwin' ? input.meta : input.control;
+    const zoomKey =
+      canvasShown &&
+      (zoomKeys.includes(input.key) || zoomCodes.includes(input.code));
     window.webContents.setIgnoreMenuShortcuts(
-      modifier && !input.shift && !input.alt && pageKeys.includes(input.code),
+      modifier &&
+        !input.alt &&
+        ((!input.shift && pageKeys.includes(input.code)) || zoomKey),
     );
   });
 
