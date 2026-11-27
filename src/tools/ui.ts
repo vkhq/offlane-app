@@ -48,6 +48,7 @@ export { RotateEditor } from '../renderer/toolkit/RotateEditor';
 export { AspectEditor } from '../renderer/toolkit/AspectEditor';
 export { CropEditor } from '../renderer/toolkit/CropEditor';
 export { SpeedEditor } from '../renderer/toolkit/SpeedEditor';
+export { AudioTrackPicker } from '../renderer/toolkit/AudioTrackPicker';
 export { GifPreview } from '../renderer/toolkit/GifPreview';
 export {
   defineTool,

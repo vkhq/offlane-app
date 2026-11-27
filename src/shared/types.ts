@@ -422,9 +422,20 @@ export type MediaApi = {
   cancelPlay(ref: MediaRef): Promise<void>;
   /** Its frame `seconds` in, `height` pixels tall, as a data: URL. */
   frame(ref: MediaRef, seconds: number, height: number): Promise<string | null>;
-  /** How loud it is along its length, as `count` peaks from 0 to 1; null
-   *  if it has no sound. */
-  waveform(ref: MediaRef, count: number): Promise<number[] | null>;
+  /** How loud its audio track `track` (the first by default) is along its
+   *  length, as `count` peaks from 0 to 1; null if it has no sound. */
+  waveform(
+    ref: MediaRef,
+    count: number,
+    track?: number,
+  ): Promise<number[] | null>;
+  /** Its audio tracks, in its order; none for a file without sound. */
+  audioTracks(ref: MediaRef): Promise<import('./audioTracks').AudioTrack[]>;
+  /** Its audio tracks, size and length, for an audio result's card. */
+  audioInfo(ref: MediaRef): Promise<import('./audioTracks').AudioFileInfo>;
+  /** Makes its audio track `track` (from 0) playable on its own, without
+   *  the picture: an <audio> element's URL. Stopped by cancelPlay. */
+  playTrack(ref: MediaRef, track: number): Promise<PlaybackSource>;
 };
 
 /** A tool session as History lists it. */

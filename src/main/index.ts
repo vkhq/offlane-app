@@ -520,6 +520,7 @@ registerIpc({
   recordings,
   previewFile: (file) => previewFile(ffmpegTools(), file),
   ffmpeg: () => ffmpegTools()?.ffmpeg ?? null,
+  ffprobe: () => ffmpegTools()?.ffprobe ?? null,
   tools,
   settings,
   toolkits,

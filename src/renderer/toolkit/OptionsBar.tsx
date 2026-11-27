@@ -185,9 +185,14 @@ function Title({
   onFile: (file: File) => void;
 }) {
   const picker = useRef<HTMLInputElement>(null);
+  const hinted =
+    setting.kind === 'select' && setting.hintInBar
+      ? hints?.[String(value)]
+      : undefined;
+  const shown = `${shownValue(setting, value)}${hinted ? ` (${hinted})` : ''}`;
   const menu = {
     label: setting.label,
-    hint: `${setting.label}: ${shownValue(setting, value)}`,
+    hint: `${setting.label}: ${shown}`,
     align: 'start' as const,
     // Once run, it shows what was chosen but no longer opens.
     disabled: readOnly,
@@ -207,16 +212,17 @@ function Title({
         {/* The value fills the option's width but sets none of it, so
             it is cut short rather than the name... */}
         <span className="mt-0.5 w-0 min-w-full truncate text-[12px] leading-4 text-ink-soft">
-          {shownValue(setting, value)}
+          {shown}
         </span>
         {/* ...while this unseen copy widens the option to fit it, up to
             the cap. It may break anywhere, so it never stops the option
             narrowing to its name. */}
         <span
           aria-hidden
-          className="h-0 max-w-27 overflow-hidden text-[12px] break-all whitespace-normal"
+          // A value with the editor's words after it may run longer.
+          className={`h-0 ${hinted ? 'max-w-44' : 'max-w-27'} overflow-hidden text-[12px] break-all whitespace-normal`}
         >
-          {shownValue(setting, value)}
+          {shown}
         </span>
       </>
     ),

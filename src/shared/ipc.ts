@@ -64,6 +64,9 @@ export const IPC = {
   mediaCancelPlay: 'media:cancel-play',
   mediaFrame: 'media:frame',
   mediaWaveform: 'media:waveform',
+  mediaAudioTracks: 'media:audio-tracks',
+  mediaAudioInfo: 'media:audio-info',
+  mediaPlayTrack: 'media:play-track',
   // main → renderer events
   jobUpdated: 'dl:job-updated',
   jobRemoved: 'dl:job-removed',

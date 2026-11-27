@@ -46,6 +46,8 @@ export function AudioPlayer({
   details,
   next,
   onMenu,
+  leading,
+  dimmed = false,
 }: {
   file: PlayerFile;
   title: string;
@@ -53,8 +55,12 @@ export function AudioPlayer({
   details: string;
   /** What's Next? for it, when it is one of several. */
   next?: ReactNode;
-  /** Opens its menu (Open, Show in Finder, Remove). */
-  onMenu: () => void;
+  /** Opens its menu (Open, Show in Finder, Remove); no menu without it. */
+  onMenu?: () => void;
+  /** Before its name: Extract Audio's box to pick the track. */
+  leading?: ReactNode;
+  /** Shown faded: a track not picked. */
+  dimmed?: boolean;
 }) {
   /** Asked to play (or seek): from then on it is readied and loaded. */
   const [wanted, setWanted] = useState(false);
@@ -76,7 +82,7 @@ export function AudioPlayer({
     if (!ref) return setPeaks(null);
     let live = true;
     window.media
-      .waveform(ref, bars)
+      .waveform(ref, bars, file.audioTrack)
       .then((found) => live && setPeaks(found))
       .catch(() => live && setPeaks(null));
     return () => {
@@ -166,7 +172,10 @@ export function AudioPlayer({
       className="flex flex-col gap-2.5 rounded-3xl bg-canvas px-4 py-3 shadow-card select-none"
     >
       <div className="flex items-center gap-3">
-        <div className="flex min-w-0 flex-1 flex-col">
+        {leading}
+        <div
+          className={`flex min-w-0 flex-1 flex-col transition-opacity ${dimmed ? 'opacity-50' : ''}`}
+        >
           <span title={title} className="truncate text-[14px] font-semibold">
             {title}
           </span>
@@ -175,14 +184,16 @@ export function AudioPlayer({
           </span>
           {next}
         </div>
-        <button
-          type="button"
-          aria-label="More actions"
-          onClick={onMenu}
-          className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full text-ink-soft hover:bg-well hover:text-ink"
-        >
-          <Ellipsis size={16} />
-        </button>
+        {onMenu && (
+          <button
+            type="button"
+            aria-label="More actions"
+            onClick={onMenu}
+            className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full text-ink-soft hover:bg-well hover:text-ink"
+          >
+            <Ellipsis size={16} />
+          </button>
+        )}
       </div>
 
       {wanted && (
@@ -274,13 +285,15 @@ function Loader({
         <p className="text-[12px] font-medium">
           {error || state.kind !== 'failed' ? error : state.message}
         </p>
-        <button
-          type="button"
-          onClick={file.open}
-          className="inline-flex h-8 shrink-0 cursor-pointer items-center rounded-full bg-ink px-3.5 text-[13px] font-semibold text-canvas hover:opacity-90"
-        >
-          Open in Default App
-        </button>
+        {file.open && (
+          <button
+            type="button"
+            onClick={file.open}
+            className="inline-flex h-8 shrink-0 cursor-pointer items-center rounded-full bg-ink px-3.5 text-[13px] font-semibold text-canvas hover:opacity-90"
+          >
+            Open in Default App
+          </button>
+        )}
       </div>
     );
   }

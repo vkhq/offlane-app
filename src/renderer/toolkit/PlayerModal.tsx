@@ -82,11 +82,17 @@ export type PlayerFile = {
   id: string;
   /** The same file for `window.media`, for its waveform. */
   media?: MediaRef;
+  /** Which of `media`'s audio tracks it is, for its waveform: one track of
+   *  a video, heard alone (Extract Audio's track picker). The first if
+   *  unset. */
+  audioTrack?: number;
   prepare: (audioTrack?: number) => Promise<PlaybackSource>;
   cancel: () => void;
   onProgress: (cb: (progress: PlaybackProgress) => void) => () => void;
-  open: () => void;
-  reveal: () => void;
+  /** Opens it in the computer's own app, and shows it in Finder: not for
+   *  one track of a video, which is no file of its own. */
+  open?: () => void;
+  reveal?: () => void;
 };
 
 /** A finished download, for the player. */
@@ -100,16 +106,32 @@ export const downloadFile = (id: string): PlayerFile => ({
   reveal: () => void window.downloader.revealFile(id),
 });
 
-/** A tool's finished output, for the player. */
-export const toolFile = (id: string): PlayerFile => ({
-  id,
-  media: { source: 'tool', jobId: id, index: 0 },
-  prepare: (track) => window.tools.preparePlayback(id, track),
-  cancel: () => void window.tools.cancelPlayback(id),
-  onProgress: (cb) => window.tools.onPlaybackProgress(cb),
-  open: () => void window.tools.open(id),
-  reveal: () => void window.tools.reveal(id),
-});
+/** A tool's finished output, for the player: its `index`th, for a job
+ *  that made several (Extract Audio's tracks), readied by reference. */
+export const toolFile = (id: string, index = 0): PlayerFile => {
+  if (index === 0) {
+    return {
+      id,
+      media: { source: 'tool', jobId: id, index: 0 },
+      prepare: (track) => window.tools.preparePlayback(id, track),
+      cancel: () => void window.tools.cancelPlayback(id),
+      onProgress: (cb) => window.tools.onPlaybackProgress(cb),
+      open: () => void window.tools.open(id),
+      reveal: () => void window.tools.reveal(id),
+    };
+  }
+  const media: MediaRef = { source: 'tool', jobId: id, index };
+  return {
+    // As the main process names it, so its progress reaches this player.
+    id: `${id}-${index}`,
+    media,
+    prepare: () => window.media.play(media),
+    cancel: () => void window.media.cancelPlay(media),
+    onProgress: (cb) => window.tools.onPlaybackProgress(cb),
+    open: () => void window.tools.open(id, index),
+    reveal: () => void window.tools.reveal(id, index),
+  };
+};
 
 /**
  * Readies `file` to play: most play at once, an MKV is rewrapped and a
@@ -445,10 +467,10 @@ export function PlayerModal({
       video.current.playbackRate = Number(choice.slice(6));
     }
     if (choice === 'open') {
-      file.open();
+      file.open?.();
       onClose();
     }
-    if (choice === 'reveal') file.reveal();
+    if (choice === 'reveal') file.reveal?.();
   };
 
   const togglePip = () => {
@@ -564,10 +586,10 @@ export function PlayerModal({
               <Failed
                 message={state.message}
                 onOpen={() => {
-                  file.open();
+                  file.open?.();
                   onClose();
                 }}
-                onReveal={() => file.reveal()}
+                onReveal={() => file.reveal?.()}
               />
             )}
           </div>

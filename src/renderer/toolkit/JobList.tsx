@@ -1,5 +1,11 @@
 import { type ReactNode, useEffect, useState } from 'react';
 
+import {
+  type AudioFileInfo,
+  channelsName,
+  codecName,
+  formatName,
+} from '../../shared/audioTracks';
 import { type FileKind, fileKindOf } from '../../shared/fileKinds';
 import type { ToolJob } from '../../shared/tools';
 import type { FilePreview } from '../../shared/types';
@@ -84,13 +90,17 @@ export function JobResults({
   );
   // Once nothing is under way, what was made, rather than just Done.
   const made = jobs.filter((job) => job.status === 'done');
+  // All done, it counts the files made: one run of Extract Audio can make
+  // several ("2 Audio Files Extracted").
+  const files = made.reduce((sum, job) => sum + job.outputs.length, 0);
+  const allDone = made.length === jobs.length;
   const label =
     status.tone === 'done' && action && made[0]?.outputs[0]
       ? madeLabel(
           action,
           fileKindOf(made[0].outputs[0]),
-          made.length,
-          jobs.length,
+          allDone ? files : made.length,
+          allDone ? files : jobs.length,
         )
       : null;
 
@@ -183,16 +193,21 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
         .join(' · ')
     : describe(job);
 
-  // A finished sound is its own player, in place of the card.
+  // A finished sound is its own player, in place of the card; a run that
+  // made several (Extract Audio's tracks) is a player for each, with What's
+  // Next? (for them all) under the last.
   if (done && kind === 'audio') {
     return (
-      <AudioPlayer
-        file={toolFile(job.id)}
-        title={name}
-        details={details}
-        next={next}
-        onMenu={() => void jobMenu(job, false, () => {})}
-      />
+      <div className="flex flex-col gap-3">
+        {job.outputs.map((output, index) => (
+          <AudioResult
+            key={output}
+            job={job}
+            index={index}
+            next={index === job.outputs.length - 1 ? next : undefined}
+          />
+        ))}
+      </div>
     );
   }
 
@@ -227,8 +242,80 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
   );
 }
 
-/** A run's menu: Play for one that plays, then the rest. */
-async function jobMenu(job: ToolJob, playable: boolean, onPlay: () => void) {
+/** A sound's details as its card shows them: "M4A · AAC · Stereo ·
+ *  48 kHz · 192 kbps · 1.2 MB"; the codec only where the file type doesn't
+ *  already say it. */
+function soundDetails(output: string, info: AudioFileInfo | null) {
+  const ext = output.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '';
+  const type = ext ? formatName(ext) : '';
+  const [track] = info?.tracks ?? [];
+  const codec = track ? codecName(track.codec) : '';
+  return [
+    type,
+    codec && codec.toLowerCase() !== type.toLowerCase() && codec,
+    track && channelsName(track.channels),
+    track?.sampleRate && `${Math.round(track.sampleRate / 100) / 10} kHz`,
+    track?.bitrate && `${Math.round(track.bitrate / 1000)} kbps`,
+    info?.size && formatBytes(info.size),
+  ].filter(Boolean);
+}
+
+/**
+ * A finished sound: its own player, in place of the card, with what it is
+ * read from the file (type, codec, channels, sample rate, bitrate, size),
+ * then the run's note. A run that made several (Extract Audio's tracks) is
+ * one of these for each, with What's Next? (for them all) under the last.
+ */
+function AudioResult({
+  job,
+  index,
+  next,
+}: {
+  job: ToolJob;
+  index: number;
+  next: ReactNode;
+}) {
+  const output = job.outputs[index];
+  const [info, setInfo] = useState<AudioFileInfo | null>(null);
+  useEffect(() => {
+    let live = true;
+    window.media
+      .audioInfo({ source: 'tool', jobId: job.id, index })
+      .then((found) => live && setInfo(found))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [job.id, index]);
+  const details = [
+    ...soundDetails(output, info),
+    // Its size until the file is read: the run's, for a run of one file.
+    !info && job.outputs.length === 1 && job.outputSize !== undefined
+      ? formatBytes(job.outputSize)
+      : null,
+    index === 0 && job.note,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <AudioPlayer
+      file={toolFile(job.id, index)}
+      title={output}
+      details={details}
+      next={next}
+      onMenu={() => void jobMenu(job, false, () => {}, index)}
+    />
+  );
+}
+
+/** A run's menu: Play for one that plays, then the rest. Open and Show in
+ *  Finder act on its `index`th file. */
+async function jobMenu(
+  job: ToolJob,
+  playable: boolean,
+  onPlay: () => void,
+  index = 0,
+) {
   const api = window.tools;
   const active = isActive(job);
   const done = job.status === 'done';
@@ -241,8 +328,8 @@ async function jobMenu(job: ToolJob, playable: boolean, onPlay: () => void) {
     { id: 'remove', label: 'Remove from List', enabled: !active },
   ]);
   if (choice === 'play') onPlay();
-  if (choice === 'open') void api.open(job.id);
-  if (choice === 'reveal') void api.reveal(job.id);
+  if (choice === 'open') void api.open(job.id, index);
+  if (choice === 'reveal') void api.reveal(job.id, index);
   if (choice === 'cancel') void api.cancel(job.id);
   if (choice === 'remove') void api.remove(job.id);
 }

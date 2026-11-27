@@ -36,7 +36,7 @@ import type { SessionStore } from './storage/sessions';
 import { installedBrowsers } from './engine/browsers';
 import { ProbeError } from './engine/probe';
 import { fetchThumbnail } from './engine/thumbnail';
-import { frameAt, waveform } from './media';
+import { audioFileInfo, audioTracks, frameAt, waveform } from './media';
 import { resolveOutputs } from './tools/outputs';
 import type { SettingsStore } from './storage/settings';
 import type { ToolQueue } from './tools/queue';
@@ -54,6 +54,8 @@ export type IpcDeps = {
   previewFile: (file: string) => Promise<FilePreview>;
   /** The app's ffmpeg, for an editor's frames and waveform, or null. */
   ffmpeg: () => string | null;
+  /** The app's ffprobe, for an editor's audio tracks, or null. */
+  ffprobe: () => string | null;
   /** Every other tool's jobs (see src/tools). */
   tools: ToolQueue;
   /** Recordings made in the page, until a tool runs on them. */
@@ -91,6 +93,10 @@ const assertId = (value: unknown): string => {
   }
   return value;
 };
+
+/** Which of a job's outputs: the first unless a whole number says. */
+const outputIndex = (value: unknown) =>
+  Number.isInteger(value) && (value as number) >= 0 ? (value as number) : 0;
 
 export function registerIpc(deps: IpcDeps): void {
   const { manager, settings } = deps;
@@ -457,9 +463,38 @@ export function registerIpc(deps: IpcDeps): void {
     const { id, file } = mediaOf(ref);
     return deps.player.prepare(id, file);
   });
-  handle(IPC.mediaCancelPlay, (ref: unknown) =>
-    deps.player.cancel(mediaOf(ref).id),
-  );
+  handle(IPC.mediaCancelPlay, (ref: unknown) => {
+    const { id } = mediaOf(ref);
+    deps.player.cancel(id);
+    deps.player.cancelStartingWith(`${id}-a`);
+  });
+  // One audio track heard alone, under an id of its own per track, so it
+  // never replaces the file's video, or another track, in another player.
+  handle(IPC.mediaPlayTrack, (ref: unknown, track: unknown) => {
+    const { id, file } = mediaOf(ref);
+    if (!Number.isInteger(track) || (track as number) < 0) {
+      throw new Error('Invalid request');
+    }
+    return deps.player.prepare(
+      `${id}-a${track as number}`,
+      file,
+      track as number,
+      {},
+      true,
+    );
+  });
+  handle(IPC.mediaAudioTracks, (ref: unknown) => {
+    const { file } = mediaOf(ref);
+    const ffprobe = deps.ffprobe();
+    if (!ffprobe) throw new Error('FFmpeg isn’t installed yet.');
+    return audioTracks(ffprobe, file);
+  });
+  handle(IPC.mediaAudioInfo, (ref: unknown) => {
+    const { file } = mediaOf(ref);
+    const ffprobe = deps.ffprobe();
+    if (!ffprobe) throw new Error('FFmpeg isn’t installed yet.');
+    return audioFileInfo(ffprobe, file);
+  });
   handle(IPC.mediaFrame, (ref: unknown, seconds: unknown, height: unknown) => {
     const { file } = mediaOf(ref);
     if (
@@ -474,19 +509,22 @@ export function registerIpc(deps: IpcDeps): void {
   });
   // Read once per file and length: it reads the whole of its sound.
   const waveforms = new Map<string, Promise<number[] | null>>();
-  handle(IPC.mediaWaveform, (ref: unknown, count: unknown) => {
+  handle(IPC.mediaWaveform, (ref: unknown, count: unknown, track: unknown) => {
     const { file } = mediaOf(ref);
+    const which = track ?? 0;
     if (
       !Number.isInteger(count) ||
       (count as number) < 1 ||
-      (count as number) > 2000
+      (count as number) > 2000 ||
+      !Number.isInteger(which) ||
+      (which as number) < 0
     ) {
       throw new Error('Invalid request');
     }
-    const key = `${file}:${count}`;
+    const key = `${file}:${count}:${which}`;
     let found = waveforms.get(key);
     if (!found) {
-      found = waveform(ffmpegOrFail(), file, count as number);
+      found = waveform(ffmpegOrFail(), file, count as number, which as number);
       found.catch(() => waveforms.delete(key));
       waveforms.set(key, found);
     }
@@ -510,9 +548,9 @@ export function registerIpc(deps: IpcDeps): void {
   });
   handle(IPC.toolsCancel, (id: unknown) => deps.tools.cancel(assertId(id)));
   handle(IPC.toolsRemove, (id: unknown) => deps.tools.remove(assertId(id)));
-  handle(IPC.toolsReveal, (id: unknown) => {
+  handle(IPC.toolsReveal, (id: unknown, index: unknown) => {
     // The path comes from the queue's own record, never from the renderer.
-    const [output] = deps.tools.outputsOf(assertId(id));
+    const output = deps.tools.outputsOf(assertId(id))[outputIndex(index)];
     if (output) shell.showItemInFolder(output);
   });
   // A frame of a finished output, for its card: made once per file.
@@ -552,8 +590,8 @@ export function registerIpc(deps: IpcDeps): void {
     }
     return preview;
   });
-  handle(IPC.toolsOpen, async (id: unknown) => {
-    const [output] = deps.tools.outputsOf(assertId(id));
+  handle(IPC.toolsOpen, async (id: unknown, index: unknown) => {
+    const output = deps.tools.outputsOf(assertId(id))[outputIndex(index)];
     if (!output) return;
     const error = await shell.openPath(output);
     if (error) throw new Error(error);

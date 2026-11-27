@@ -31,6 +31,12 @@ export type StandardTool<O extends Options> = {
   /** Label of the action button. */
   action: string;
   /**
+   * The button's words for these values, in place of `action` counted by
+   * files ("Mute 2 Videos"), for a tool whose count is something else:
+   * Extract Audio's "Extract 2 Tracks". Its verb is still `action`'s.
+   */
+  actionLabel?: (values: OptionValues<O>) => string;
+  /**
    * Shown in place of the file once one is added, to set the options on
    * it by hand, as Trim Video's timeline sets Start and End (see
    * TrimEditor). A tool with an editor works on one file at a time, on its

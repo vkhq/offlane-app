@@ -2,7 +2,10 @@
 // handler, so nothing here may import React or Electron.
 export {
   defineOptions,
+  editorList,
   editorValue,
+  formatList,
+  parseList,
   file,
   info,
   language,

@@ -123,25 +123,44 @@ export class Player {
   /**
    * Makes job `id`'s finished file, at `file`, playable with its audio
    * track `track`, and returns the URL to play it from. Asked twice while
-   * preparing, it answers both at once.
+   * preparing, it answers both at once. `audioOnly` leaves any picture
+   * out, for hearing one track of a video (Extract Audio's track picker):
+   * an audio copy of the track, so a video Chromium can't decode (or
+   * Offlane can't, as HEVC) still plays its sound.
    */
   prepare(
     id: string,
     file: string,
     track = 0,
     hints: TrackHints = {},
+    audioOnly = false,
   ): Promise<PlaybackSource> {
     const key = `${id}:${track}`;
     const running = this.pending.get(key);
     if (running) return running.promise;
     const abort = new AbortController();
-    const promise = this.make(id, file, track, hints, abort.signal).finally(
-      () => {
-        if (this.pending.get(key)?.abort === abort) this.pending.delete(key);
-      },
-    );
+    const promise = this.make(
+      id,
+      file,
+      track,
+      hints,
+      audioOnly,
+      abort.signal,
+    ).finally(() => {
+      if (this.pending.get(key)?.abort === abort) this.pending.delete(key);
+    });
     this.pending.set(key, { promise, abort });
     return promise;
+  }
+
+  /** Stops preparing every job whose id starts with `prefix`: all of an
+   *  editor's tracks heard alone (`<id>-a0`, `<id>-a1`…). */
+  cancelStartingWith(prefix: string) {
+    for (const [key, { abort }] of this.pending) {
+      if (!key.startsWith(prefix)) continue;
+      abort.abort();
+      this.pending.delete(key);
+    }
   }
 
   /** Stops preparing job `id`, when its player is closed before it plays. */
@@ -158,6 +177,7 @@ export class Player {
     file: string,
     track: number,
     hints: TrackHints,
+    audioOnly: boolean,
     signal: AbortSignal,
   ): Promise<PlaybackSource> {
     const tools = this.deps.getFfmpeg();
@@ -180,10 +200,15 @@ export class Player {
     const streams = (info.streams ?? []).filter(
       (stream) => !stream.disposition?.attached_pic,
     );
-    const video = streams.filter((stream) => stream.codec_type === 'video');
+    const pictures = streams.filter((stream) => stream.codec_type === 'video');
+    const video = audioOnly ? [] : pictures;
     const audio = streams.filter((stream) => stream.codec_type === 'audio');
     if (video.length === 0 && audio.length === 0) {
-      throw new Error('This file has no video or audio to play.');
+      throw new Error(
+        audioOnly
+          ? 'This file has no sound to play.'
+          : 'This file has no video or audio to play.',
+      );
     }
     const stat = await fs.stat(file);
     const chosen = Math.min(
@@ -210,7 +235,15 @@ export class Player {
 
     // With several audio tracks, Chromium would play only the first: each
     // gets a copy of its own.
-    if (videoOk && audioOk && audio.length <= 1 && containerOk(info, file)) {
+    // Heard alone, a video's track is always copied out of it.
+    const whole = !audioOnly || pictures.length === 0;
+    if (
+      whole &&
+      videoOk &&
+      audioOk &&
+      audio.length <= 1 &&
+      containerOk(info, file)
+    ) {
       return this.serve(id, file, 'direct', shape, tracks);
     }
 
@@ -222,7 +255,7 @@ export class Player {
     const ext = webm ? '.webm' : video.length ? '.mp4' : '.m4a';
     const output = path.join(
       this.deps.cacheDir,
-      `${id}-${Math.round(stat.mtimeMs)}${audio.length > 1 ? `-a${chosen}` : ''}${ext}`,
+      `${id}-${Math.round(stat.mtimeMs)}${audio.length > 1 ? `-a${chosen}` : ''}${audioOnly ? '-audio' : ''}${ext}`,
     );
     const prepared = remux ? 'remux' : 'transcode';
     if (existsSync(output)) {
@@ -232,12 +265,13 @@ export class Player {
     const args = [
       '-i',
       `file:${file}`,
-      '-map',
-      '0:v:0?',
+      ...(audioOnly ? ['-vn'] : ['-map', '0:v:0?']),
       '-map',
       `0:a:${chosen}?`,
     ];
-    if (videoOk) {
+    if (audioOnly) {
+      // No picture to copy or make.
+    } else if (videoOk) {
       args.push('-c:v', 'copy');
     } else {
       const encoder = await pickH264Encoder(tools.ffmpeg);

@@ -64,6 +64,7 @@ import { type ToolHandler, ToolQueue } from '../main/tools/queue';
 import {
   clock,
   defineOptions,
+  editorList,
   editorValue,
   file,
   inBar,
@@ -86,6 +87,7 @@ import cropVideo from '../tools/video/crop-video/handler';
 import changeSpeed from '../tools/video/change-speed/handler';
 import videoToGif from '../tools/video/video-to-gif/handler';
 import cleanUpAudio from '../tools/audio/clean-up-audio/handler';
+import extractAudio from '../tools/audio/extract-audio/handler';
 import { gifDelays, gifPlays } from '../shared/gif';
 import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
@@ -104,7 +106,8 @@ import {
   parseSize,
   withinLimits,
 } from '../shared/frameSize';
-import { frameAt, waveform } from '../main/media';
+import { audioFileInfo, audioTracks, frameAt, waveform } from '../main/media';
+import { formatName, originalFile, trackDetails } from '../shared/audioTracks';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
 import { resolveOutputs } from '../main/tools/outputs';
@@ -4081,6 +4084,347 @@ describe('tool queue', () => {
       assert.match(mute.error ?? '', /no sound to clean up/);
 
       for (const name of made) rmSync(path.join(outDir(), name));
+    },
+  );
+  test(
+    'Extract Audio lists a video’s tracks and saves the picked ones',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'extract');
+      await fs.mkdir(dir, { recursive: true });
+      const picture = [
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=2:size=160x120:rate=10',
+      ];
+      const tone = (hz: number, layout = 'stereo') => [
+        '-f',
+        'lavfi',
+        '-i',
+        `sine=frequency=${hz}:duration=2:sample_rate=48000,aformat=channel_layouts=${layout}`,
+      ];
+      // A film with three tracks: English AAC (the default), an English
+      // AC-3 5.1 commentary, and Spanish Opus.
+      const film = path.join(dir, 'film.mkv');
+      ffmpegOk([
+        ...picture,
+        ...tone(440),
+        ...tone(550, '5.1'),
+        ...tone(660),
+        '-map',
+        '0',
+        '-map',
+        '1',
+        '-map',
+        '2',
+        '-map',
+        '3',
+        '-c:v',
+        'mpeg4',
+        '-c:a:0',
+        'aac',
+        '-c:a:1',
+        'ac3',
+        '-c:a:2',
+        'libopus',
+        '-metadata:s:a:0',
+        'language=eng',
+        '-metadata:s:a:1',
+        'language=eng',
+        '-metadata:s:a:1',
+        'title=Commentary',
+        '-metadata:s:a:2',
+        'language=spa',
+        '-disposition:a:0',
+        'default',
+        '-disposition:a:1',
+        '0',
+        '-disposition:a:2',
+        '0',
+        film,
+      ]);
+      // One AAC track, in an MP4.
+      const clip = path.join(dir, 'clip.mp4');
+      ffmpegOk([
+        ...picture,
+        ...tone(440),
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'aac',
+        '-shortest',
+        clip,
+      ]);
+      // A camera's MOV with big-endian PCM.
+      const camera = path.join(dir, 'camera.mov');
+      ffmpegOk([
+        ...picture,
+        ...tone(440),
+        '-c:v',
+        'mpeg4',
+        '-c:a',
+        'pcm_s16be',
+        '-shortest',
+        camera,
+      ]);
+      const silent = path.join(dir, 'silent.mp4');
+      ffmpegOk([...picture, '-c:v', 'mpeg4', silent]);
+
+      const probe = (file: string) =>
+        JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'format=duration:stream=codec_type,codec_name,channels,sample_rate',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          format: { duration: string };
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            channels?: number;
+            sample_rate?: string;
+          }[];
+        };
+
+      // The tracks, as the picker lists them.
+      const tracks = await audioTracks(vendorFfprobe, film);
+      assert.deepEqual(
+        tracks.map((track) => [
+          track.index,
+          track.label,
+          track.codec,
+          track.channels,
+          track.isDefault,
+        ]),
+        [
+          [0, 'English', 'aac', 2, true],
+          [1, 'English (Commentary)', 'ac3', 6, false],
+          [2, 'Spanish', 'opus', 2, false],
+        ],
+      );
+      assert.equal(
+        trackDetails(tracks[1]).split(' · ').slice(0, 3).join(' · '),
+        'AC-3 · 5.1 · 48 kHz',
+      );
+      assert.deepEqual(await audioTracks(vendorFfprobe, silent), []);
+      // Each track's own waveform, as its player in the picker draws it;
+      // none for a track the file doesn't have.
+      for (const index of [0, 1, 2]) {
+        const peaks = await waveform(vendorFfmpeg, film, 20, index);
+        assert.equal(peaks?.length, 20, `track ${index}`);
+      }
+      assert.equal(await waveform(vendorFfmpeg, film, 20, 5), null);
+      // What Original makes, as the Format menu names it beside Original.
+      assert.deepEqual(
+        tracks.map((track) => formatName(originalFile(track.codec).ext)),
+        ['M4A', 'M4A', 'Opus'],
+      );
+      assert.equal(originalFile('ac3').how, 'm4a');
+      assert.equal(originalFile('pcm_s16be').ext, 'aiff');
+      // A file that marks no default plays, and so ticks, its first.
+      const [only] = await audioTracks(vendorFfprobe, clip);
+      assert.equal(only.isDefault, true);
+      assert.equal(only.label, 'Track 1');
+
+      // The list option: untrusted text falls back, a list is tidied.
+      const listed = { tracks: editorList('Tracks') };
+      assert.equal(parseValues(listed, { tracks: '2,0,2' }).tracks, '0,2');
+      assert.equal(parseValues(listed, { tracks: '1;rm -rf' }).tracks, '');
+      assert.equal(parseValues(listed, { tracks: [1, 2] }).tracks, '');
+      assert.equal(inBar(listed, 'tracks', { tracks: '0' }), false);
+
+      const tools = queue({ 'extract-audio': extractAudio });
+      const made: string[] = [];
+      const extract = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('extract-audio', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        return {
+          ...done,
+          outs: done.outputs.map((name) => path.join(outDir(), name)),
+        };
+      };
+
+      // Original, all three: each copied as it is, in its own file type;
+      // AC-3, which no audio file holds, becomes M4A (AAC), still 5.1.
+      const all = await extract(film, { tracks: '0,1,2', format: 'Original' });
+      assert.equal(all.status, 'done', all.error ?? '');
+      assert.deepEqual(all.outputs, [
+        'film - English.m4a',
+        'film - English (Commentary).m4a',
+        'film - Spanish.opus',
+      ]);
+      assert.deepEqual(
+        all.outs.map((out) => {
+          const [stream] = probe(out).streams;
+          return [
+            probe(out).streams.length,
+            stream.codec_name,
+            stream.channels,
+          ];
+        }),
+        [
+          [1, 'aac', 2],
+          [1, 'aac', 6],
+          [1, 'opus', 2],
+        ],
+      );
+      for (const out of all.outs) {
+        assert.ok(Math.abs(Number(probe(out).format.duration) - 2) < 0.2, out);
+      }
+      assert.match(
+        all.note ?? '',
+        /Commentary\) was AC-3, so it was saved as M4A/,
+      );
+      // What each result's card says of it, read from the file: Opus keeps
+      // no bitrate on its stream, so it is the file's.
+      for (const out of all.outs) {
+        const info = await audioFileInfo(vendorFfprobe, out);
+        assert.equal(info.tracks.length, 1, out);
+        assert.ok((info.tracks[0].bitrate ?? 0) > 0, `bitrate of ${out}`);
+        assert.equal(info.tracks[0].sampleRate, 48_000, out);
+        assert.ok((info.size ?? 0) > 0, `size of ${out}`);
+        assert.ok(Math.abs((info.duration ?? 0) - 2) < 0.2, out);
+      }
+      assert.deepEqual(
+        (
+          await Promise.all(
+            all.outs.map((out) => audioFileInfo(vendorFfprobe, out)),
+          )
+        ).map((info) => [info.tracks[0].codec, info.tracks[0].channels]),
+        [
+          ['aac', 2],
+          ['aac', 6],
+          ['opus', 2],
+        ],
+      );
+
+      // Some of them, as MP3: the 5.1 track mixed to stereo, as MP3 holds.
+      const some = await extract(film, {
+        tracks: '1,2',
+        format: 'MP3',
+        bitrate: '128 kbps',
+      });
+      assert.equal(some.status, 'done', some.error ?? '');
+      assert.deepEqual(some.outputs, [
+        'film - English (Commentary).mp3',
+        'film - Spanish.mp3',
+      ]);
+      assert.deepEqual(
+        some.outs.map((out) => [
+          probe(out).streams[0].codec_name,
+          probe(out).streams[0].channels,
+        ]),
+        [
+          ['mp3', 2],
+          ['mp3', 2],
+        ],
+      );
+
+      // Every other format, on a video with one track: named after the
+      // video alone.
+      for (const [format, ext, codec] of [
+        ['M4A', 'm4a', 'aac'],
+        ['WAV', 'wav', 'pcm_s16le'],
+        ['FLAC', 'flac', 'flac'],
+        ['OGG', 'ogg', 'vorbis'],
+      ]) {
+        const one = await extract(clip, { tracks: '0', format });
+        assert.equal(one.status, 'done', one.error ?? '');
+        assert.equal(one.outputs[0], `clip.${ext}`);
+        assert.equal(probe(one.outs[0]).streams[0].codec_name, codec);
+        // Every type's card has a bitrate, FLAC's from the file.
+        assert.ok(
+          ((await audioFileInfo(vendorFfprobe, one.outs[0])).tracks[0]
+            .bitrate ?? 0) > 0,
+          format,
+        );
+        for (const name of one.outputs) rmSync(path.join(outDir(), name));
+        made.splice(made.indexOf(one.outputs[0]), 1);
+      }
+
+      // A camera's big-endian PCM is copied into an AIFF.
+      const cam = await extract(camera, { tracks: '0', format: 'Original' });
+      assert.equal(cam.status, 'done', cam.error ?? '');
+      assert.deepEqual(cam.outputs, ['camera.aiff']);
+      assert.equal(probe(cam.outs[0]).streams[0].codec_name, 'pcm_s16be');
+
+      // Tracks picked on another file: the ones there are kept, and the
+      // note says the rest weren't; none there fails.
+      const stale = await extract(clip, { tracks: '0,3', format: 'Original' });
+      assert.equal(stale.status, 'done', stale.error ?? '');
+      assert.match(stale.note ?? '', /1 picked track isn’t in this video/);
+      const gone = await extract(clip, { tracks: '4', format: 'Original' });
+      assert.equal(gone.status, 'failed');
+      assert.match(gone.error ?? '', /aren't in this video/);
+      const none = await extract(clip, { tracks: '', format: 'Original' });
+      assert.equal(none.status, 'failed');
+      assert.match(none.error ?? '', /Pick at least one track/);
+      const mute = await extract(silent, { tracks: '0' });
+      assert.equal(mute.status, 'failed');
+      assert.match(mute.error ?? '', /no sound to extract/);
+
+      // An iPhone's HEVC video: the picture is never decoded, so its sound
+      // comes out though Offlane has no HEVC decoder.
+      const iphone = path.join(dir, 'iphone.mov');
+      const hevc = spawnSync(vendorFfmpeg, [
+        '-hide_banner',
+        '-y',
+        ...picture,
+        ...tone(440),
+        '-c:v',
+        'hevc_videotoolbox',
+        '-tag:v',
+        'hvc1',
+        '-c:a',
+        'aac',
+        '-shortest',
+        iphone,
+      ]);
+      if (hevc.status === 0) {
+        const phone = await extract(iphone, {
+          tracks: '0',
+          format: 'Original',
+        });
+        assert.equal(phone.status, 'done', phone.error ?? '');
+        assert.deepEqual(phone.outputs, ['iphone.m4a']);
+        const mp3 = await extract(iphone, { tracks: '0', format: 'MP3' });
+        assert.equal(mp3.status, 'done', mp3.error ?? '');
+      } else {
+        console.log('    (no HEVC encoder here: the HEVC case was skipped)');
+      }
+
+      // One track heard alone, as the picker plays it: an audio copy with
+      // no picture, even of the AC-3 commentary.
+      const player = new Player({
+        getFfmpeg: () => ({ ffmpeg: vendorFfmpeg, ffprobe: vendorFfprobe }),
+        cacheDir: path.join(dir, 'player-cache'),
+        onProgress: () => {},
+      });
+      const heard = await player.prepare('pick-audio-a1', film, 1, {}, true);
+      const servedFile = (
+        player as unknown as { served: Map<string, string> }
+      ).served.get('pick-audio-a1')!;
+      const heardProbe = probe(servedFile);
+      assert.deepEqual(
+        heardProbe.streams.map((stream) => stream.codec_type),
+        ['audio'],
+      );
+      assert.equal(heardProbe.streams[0].codec_name, 'aac');
+      assert.match(heard.url, /^media:\/\/job\/pick-audio-a1\?/);
+
+      for (const name of made)
+        rmSync(path.join(outDir(), name), { force: true });
     },
   );
 });

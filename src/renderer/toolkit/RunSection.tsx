@@ -88,7 +88,8 @@ export function RunSection<O extends Options>({
     inBar(options, key, values),
   );
   const label =
-    count !== undefined && kind ? countedAction(action, count, kind) : action;
+    config.actionLabel?.(values) ??
+    (count !== undefined && kind ? countedAction(action, count, kind) : action);
 
   return (
     <>

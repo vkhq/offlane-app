@@ -589,3 +589,12 @@ export {
   sizeLabel,
   type FrameSize,
 } from '../shared/frameSize';
+
+// A video's audio tracks, as Extract Audio's track picker lists them too.
+export { audioTracks } from '../main/media';
+export {
+  type AudioTrack,
+  codecName,
+  channelsName,
+  originalFile,
+} from '../shared/audioTracks';

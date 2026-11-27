@@ -18,6 +18,9 @@ export type SelectSetting = {
   /** The choice as a summary says it, when the value alone wouldn't say
    *  what it is ("English" → "English audio"); null leaves it out. */
   summary?: (value: string) => string | null;
+  /** Shows the editor's words for the chosen value (see OptionHints) in
+   *  the bar too, after it: Extract Audio's "Original (M4A)". */
+  hintInBar?: boolean;
 };
 export type ToggleSetting = { kind: 'toggle'; label: string; value: boolean };
 export type NumberSetting = {
@@ -57,6 +60,21 @@ export type EditorSetting = {
   min: number;
   max: number;
 };
+/**
+ * A list of whole numbers a tool's editor picks on the file (Extract
+ * Audio's tracks), held as text, "0,2", so it saves and restores as any
+ * other value does. Like `EditorSetting`, sent to the handler but never in
+ * the options bar or the summary. Checked as untrusted: anything but
+ * comma-separated whole numbers falls back to its default. The handler
+ * still checks each number against the file, which may not be the one it
+ * was picked on.
+ */
+export type EditorListSetting = {
+  kind: 'editorList';
+  /** What it is, for anyone reading the code or a saved tab. */
+  label: string;
+  value: string;
+};
 
 export type Setting = (
   | SelectSetting
@@ -68,6 +86,7 @@ export type Setting = (
   | FileSetting
   | InfoSetting
   | EditorSetting
+  | EditorListSetting
 ) & { when?: Condition };
 
 export type SettingValue = string | number | boolean;
@@ -120,7 +139,12 @@ export const inBar = (
   options: Options,
   key: string,
   values: Record<string, unknown>,
-) => options[key]?.kind !== 'editor' && isShown(options, key, values);
+) => {
+  const kind = options[key]?.kind;
+  return (
+    kind !== 'editor' && kind !== 'editorList' && isShown(options, key, values)
+  );
+};
 
 /** `setting`, shown only while option `option` is one of `is`. */
 export const shownWhen = <S extends Setting>(
@@ -168,6 +192,12 @@ export function parseValues<O extends Options>(
           );
         }
         break;
+      case 'editorList':
+        if (typeof value === 'string' && value.length <= 1024) {
+          const list = parseList(value);
+          if (list) values[key] = formatList(list);
+        }
+        break;
       case 'info':
         // Fixed text, never chosen.
         break;
@@ -206,6 +236,28 @@ export const editorValue = (
   value = 0,
   { min = 0, max = 8192 }: { min?: number; max?: number } = {},
 ): EditorSetting => ({ kind: 'editor', label, value, min, max });
+
+/**
+ * A list of whole numbers a tool's editor picks (see `EditorListSetting`),
+ * from `value`; empty, none picked, unless told otherwise.
+ */
+export const editorList = (label: string, value = ''): EditorListSetting => ({
+  kind: 'editorList',
+  label,
+  value,
+});
+
+/** An editor list's numbers ("2,0,2" → [0, 2]: in order, each once), or
+ *  null if it isn't one. "" is the empty list. */
+export function parseList(value: string): number[] | null {
+  if (value === '') return [];
+  if (!/^\d{1,4}(,\d{1,4})*$/.test(value)) return null;
+  return [...new Set(value.split(',').map(Number))].sort((a, b) => a - b);
+}
+
+/** Numbers as an editor list holds them: [0, 2] → "0,2". */
+export const formatList = (numbers: number[]) =>
+  [...new Set(numbers)].sort((a, b) => a - b).join(',');
 
 export const info = (label: string, value: string): InfoSetting => ({
   kind: 'info',
@@ -382,9 +434,11 @@ export type ToolsApi = {
   list: () => Promise<ToolJob[]>;
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
-  reveal: (id: string) => Promise<void>;
+  /** Shows a finished job's output in Finder: its `index`th (the first by
+   *  default), for a job that made several. */
+  reveal: (id: string, index?: number) => Promise<void>;
   /** Opens a finished job's output in the computer's own app for it. */
-  open: (id: string) => Promise<void>;
+  open: (id: string, index?: number) => Promise<void>;
   /** A frame of a finished job's video output, and its length; nothing
    *  for one that isn't a video, or can't be read. */
   preview: (id: string) => Promise<import('./types').FilePreview>;

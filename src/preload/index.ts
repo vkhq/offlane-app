@@ -134,8 +134,8 @@ const tools: ToolsApi = {
   list: () => call(IPC.toolsList),
   cancel: (id) => call(IPC.toolsCancel, id),
   remove: (id) => call(IPC.toolsRemove, id),
-  reveal: (id) => call(IPC.toolsReveal, id),
-  open: (id) => call(IPC.toolsOpen, id),
+  reveal: (id, index) => call(IPC.toolsReveal, id, index),
+  open: (id, index) => call(IPC.toolsOpen, id, index),
   preview: (id) => call(IPC.toolsPreview, id),
   preparePlayback: (id, audioTrack) =>
     call(IPC.toolsPreparePlayback, id, audioTrack),
@@ -156,7 +156,11 @@ const media: MediaApi = {
   play: (ref) => call(IPC.mediaPlay, ref),
   cancelPlay: (ref) => call(IPC.mediaCancelPlay, ref),
   frame: (ref, seconds, height) => call(IPC.mediaFrame, ref, seconds, height),
-  waveform: (ref, count) => call(IPC.mediaWaveform, ref, count),
+  waveform: (ref, count, track) =>
+    call(IPC.mediaWaveform, ref, count, track ?? 0),
+  audioTracks: (ref) => call(IPC.mediaAudioTracks, ref),
+  audioInfo: (ref) => call(IPC.mediaAudioInfo, ref),
+  playTrack: (ref, track) => call(IPC.mediaPlayTrack, ref, track),
 };
 
 const sessions: SessionsApi = {

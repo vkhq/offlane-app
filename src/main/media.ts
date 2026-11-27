@@ -6,6 +6,12 @@
 // No Electron import, so the integration tests can use it with plain Node.
 import { spawn } from 'node:child_process';
 
+import {
+  type AudioFileInfo,
+  type ProbedAudioStream,
+  audioTracksFrom,
+} from '../shared/audioTracks';
+
 /** Frames made at once; the track asks for several together. */
 const framesAtOnce = 3;
 let running = 0;
@@ -102,7 +108,7 @@ export function frameAt(
 const sampleRate = 2000;
 
 /**
- * How loud `file`'s first audio track is along its length, as `count`
+ * How loud `file`'s audio track `track` (the first by default) is along its length, as `count`
  * peaks from 0 to 1 (the loudest is 1), evenly spaced; null if it has no
  * sound. Its channels are mixed into one.
  */
@@ -110,6 +116,7 @@ export async function waveform(
   ffmpeg: string,
   file: string,
   count: number,
+  track = 0,
 ): Promise<number[] | null> {
   // The loudest sample of every hundredth of a second, as it is read.
   const block = sampleRate / 100;
@@ -125,7 +132,7 @@ export async function waveform(
       '-i',
       `file:${file}`,
       '-map',
-      '0:a:0',
+      `0:a:${track}`,
       '-ac',
       '1',
       '-ar',
@@ -173,3 +180,70 @@ export async function waveform(
     loudest ? Math.round((value / loudest) * 1000) / 1000 : 0,
   );
 }
+
+/**
+ * `file`'s audio tracks (see shared/audioTracks.ts), its size and its
+ * length, read with ffprobe; no tracks for a file without sound. A file
+ * of one stream whose stream doesn't say its bitrate (FLAC, Opus, Vorbis)
+ * takes the file's. Throws when ffprobe can't read it.
+ */
+export function audioFileInfo(
+  ffprobe: string,
+  file: string,
+): Promise<AudioFileInfo> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffprobe, [
+      '-v',
+      'error',
+      '-show_entries',
+      'stream=codec_type,codec_name,channels,sample_rate,bit_rate:stream_disposition=default,attached_pic:stream_tags:format=nb_streams,bit_rate,size,duration',
+      '-of',
+      'json',
+      `file:${file}`,
+    ]);
+    const out: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
+    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      try {
+        if (code !== 0) throw new Error();
+        const probed = JSON.parse(Buffer.concat(out).toString() || '{}') as {
+          streams?: (ProbedAudioStream & {
+            disposition?: { attached_pic?: number };
+          })[];
+          format?: Record<string, string | number | undefined>;
+        };
+        const number = (value: unknown) => {
+          const found = Number(value);
+          return Number.isFinite(found) && found > 0 ? found : null;
+        };
+        // Cover art is a picture, not a stream of the sound's.
+        const streams = (probed.streams ?? []).filter(
+          (stream) => !stream.disposition?.attached_pic,
+        );
+        let tracks = audioTracksFrom(streams);
+        const alone = streams.length === 1 && tracks.length === 1;
+        const fileRate = number(probed.format?.bit_rate);
+        if (alone && !tracks[0].bitrate && fileRate) {
+          tracks = [{ ...tracks[0], bitrate: fileRate }];
+        }
+        resolve({
+          tracks,
+          size: number(probed.format?.size),
+          duration: number(probed.format?.duration),
+        });
+      } catch {
+        reject(new Error("Can't read this file's audio."));
+      }
+    });
+  });
+}
+
+/** `file`'s audio tracks (see audioFileInfo). */
+export const audioTracks = async (ffprobe: string, file: string) =>
+  (await audioFileInfo(ffprobe, file)).tracks;
