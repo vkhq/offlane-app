@@ -89,6 +89,7 @@ import videoToGif from '../tools/video/video-to-gif/handler';
 import cleanUpAudio from '../tools/audio/clean-up-audio/handler';
 import extractAudio from '../tools/audio/extract-audio/handler';
 import convertAudio from '../tools/audio/convert-audio/handler';
+import trimAudio from '../tools/audio/trim-audio/handler';
 import { gifDelays, gifPlays } from '../shared/gif';
 import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
@@ -2251,6 +2252,176 @@ describe('tool queue', () => {
       for (const name of [...middle.outputs, ...rest.outputs]) {
         rmSync(path.join(outDir(), name));
       }
+    },
+  );
+
+  test(
+    'Trim Audio keeps the part asked for, in the format it came in',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'trim-audio');
+      await fs.mkdir(dir, { recursive: true });
+      const tone = ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=4'];
+      const cover = path.join(dir, 'cover.jpg');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=size=64x64',
+        '-frames:v',
+        '1',
+        cover,
+      ]);
+      // An MP3 at 128 kbps with a title and cover art.
+      const song = path.join(dir, 'song.mp3');
+      ffmpegOk([
+        ...tone,
+        '-i',
+        cover,
+        '-map',
+        '0:a',
+        '-map',
+        '1:v',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '128k',
+        '-c:v',
+        'mjpeg',
+        '-disposition:v',
+        'attached_pic',
+        '-metadata',
+        'title=Song',
+        song,
+      ]);
+      // A 24-bit WAV at 96 kHz, a FLAC, an Opus in OGG and a WMA.
+      const wav = path.join(dir, 'master.wav');
+      ffmpegOk([...tone, '-ar', '96000', '-c:a', 'pcm_s24le', wav]);
+      const flac = path.join(dir, 'take.flac');
+      ffmpegOk([...tone, '-metadata', 'title=Take', flac]);
+      const ogg = path.join(dir, 'voice.ogg');
+      ffmpegOk([...tone, '-c:a', 'libopus', '-metadata', 'title=Voice', ogg]);
+      const wma = path.join(dir, 'old.wma');
+      ffmpegOk([...tone, '-c:a', 'wmav2', wma]);
+
+      const probe = (file: string) =>
+        JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'format=duration,bit_rate:format_tags=title:stream=codec_type,codec_name,sample_rate:stream_tags=title:stream_disposition=attached_pic',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as {
+          format: {
+            duration: string;
+            bit_rate: string;
+            tags?: { title?: string };
+          };
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            sample_rate?: string;
+            tags?: { title?: string };
+            disposition?: { attached_pic?: number };
+          }[];
+        };
+
+      const tools = queue({ 'trim-audio': trimAudio });
+      const made: string[] = [];
+      const trim = async (
+        file: string,
+        values: { start: number; end: number },
+      ) => {
+        const [job] = tools.run('trim-audio', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        made.push(...done.outputs);
+        const out = done.outputs[0] ? path.join(outDir(), done.outputs[0]) : '';
+        return { ...done, out, probe: out ? probe(out) : null };
+      };
+      const near = (actual: string | undefined, expected: number) =>
+        assert.ok(
+          Math.abs(Number(actual) - expected) < 0.06,
+          `${actual} is not ${expected}`,
+        );
+
+      // 1 s to 2.5 s of the MP3: still an MP3 near 128 kbps, its title and
+      // cover art kept, 1.5 s long.
+      const mp3 = await trim(song, { start: 1, end: 2.5 });
+      assert.equal(mp3.status, 'done', mp3.error ?? '');
+      assert.deepEqual(mp3.outputs, ['song-trimmed.mp3']);
+      assert.equal(mp3.note, undefined);
+      near(mp3.probe!.format.duration, 1.5);
+      assert.equal(mp3.probe!.format.tags?.title, 'Song');
+      assert.deepEqual(
+        mp3.probe!.streams.map((s) => [
+          s.codec_name,
+          s.disposition?.attached_pic,
+        ]),
+        [
+          ['mp3', 0],
+          ['mjpeg', 1],
+        ],
+      );
+      const kbps = Number(mp3.probe!.format.bit_rate) / 1000;
+      assert.ok(kbps > 100 && kbps < 170, String(kbps));
+
+      // The 24-bit 96 kHz WAV stays one.
+      const master = await trim(wav, { start: 0.5, end: 1 });
+      assert.equal(master.status, 'done', master.error ?? '');
+      assert.deepEqual(master.outputs, ['master-trimmed.wav']);
+      near(master.probe!.format.duration, 0.5);
+      assert.deepEqual(
+        [
+          master.probe!.streams[0].codec_name,
+          master.probe!.streams[0].sample_rate,
+        ],
+        ['pcm_s24le', '96000'],
+      );
+
+      // FLAC stays FLAC, with its title.
+      const take = await trim(flac, { start: 2, end: 3.25 });
+      assert.equal(take.status, 'done', take.error ?? '');
+      assert.deepEqual(take.outputs, ['take-trimmed.flac']);
+      near(take.probe!.format.duration, 1.25);
+      assert.equal(take.probe!.streams[0].codec_name, 'flac');
+      assert.equal(take.probe!.format.tags?.title, 'Take');
+
+      // Opus in OGG stays Opus, its title on the sound as Ogg keeps it.
+      const voice = await trim(ogg, { start: 1, end: 3 });
+      assert.equal(voice.status, 'done', voice.error ?? '');
+      assert.deepEqual(voice.outputs, ['voice-trimmed.ogg']);
+      near(voice.probe!.format.duration, 2);
+      assert.equal(voice.probe!.streams[0].codec_name, 'opus');
+      assert.equal(voice.probe!.streams[0].tags?.title, 'Voice');
+
+      // WMA, which Offlane can't make, comes out as M4A, and says so; End
+      // past the end keeps the rest, and says so too.
+      const old = await trim(wma, { start: 3, end: 30 });
+      assert.equal(old.status, 'done', old.error ?? '');
+      assert.deepEqual(old.outputs, ['old-trimmed.m4a']);
+      assert.equal(old.probe!.streams[0].codec_name, 'aac');
+      assert.ok(Math.abs(Number(old.probe!.format.duration) - 1) < 0.1);
+      assert.match(old.note ?? '', /past the end of the file/);
+      assert.match(old.note ?? '', /Saved as M4A/);
+
+      // A Start past the end, or an End before Start, fails with why.
+      const late = await trim(song, { start: 9, end: 12 });
+      assert.equal(late.status, 'failed');
+      assert.match(late.error ?? '', /Start is after the end of the file/);
+      const backwards = await trim(song, { start: 2, end: 1 });
+      assert.equal(backwards.status, 'failed');
+      assert.match(backwards.error ?? '', /End must be after Start/);
+
+      // The other tests here expect the output folder as they left it.
+      for (const name of made) rmSync(path.join(outDir(), name));
     },
   );
 

@@ -19,7 +19,7 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { gifDelays } from '../shared/gif';
-import { IPC, type IpcResult } from '../shared/ipc';
+import { IPC, type IpcResult, maxWaveformPeaks } from '../shared/ipc';
 import { isStorageItemId, type StorageItemId } from '../shared/storage';
 import { isToolkitId, type ToolkitId } from '../shared/toolkits';
 import type {
@@ -515,7 +515,7 @@ export function registerIpc(deps: IpcDeps): void {
     if (
       !Number.isInteger(count) ||
       (count as number) < 1 ||
-      (count as number) > 2000 ||
+      (count as number) > maxWaveformPeaks ||
       !Number.isInteger(which) ||
       (which as number) < 0
     ) {

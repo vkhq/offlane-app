@@ -1,12 +1,15 @@
 import {
   type KeyboardEvent,
   type PointerEvent,
+  type RefObject,
+  type SyntheticEvent,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 
+import { maxWaveformPeaks } from '../../shared/ipc';
 import { clock } from '../../shared/tools';
 import type { MediaRef } from '../../shared/types';
 import { useTabView } from '../tabState';
@@ -26,6 +29,12 @@ import { iconButton, smallButton } from './styles';
 const shortest = 0.1;
 /** The video track's height, and its frames', in px. */
 const trackHeight = 56;
+/** Peaks a second the waveform is read at (see WaveTrack): the most the
+ *  main process measures, so zoomed far in each bar is its own. */
+const peaksPerSecond = 100;
+/** A waveform bar's pitch and width, in px. */
+const barPitch = 3;
+const barWidth = 2;
 
 /** A ruler label: whole seconds as "0:05", or "0:02.5" between them. */
 const rulerLabel = (seconds: number) => {
@@ -212,6 +221,10 @@ function nearestFrame(mediaKey: string, at: number): string | null {
  * Left and Right move the playhead 5 seconds; Up and Down move it to the
  * next or previous of the video's start, Start, End and the video's end.
  * Once the tool has run, the handles are fixed, as the record of the cut.
+ *
+ * With `sound` (Trim Audio's), there is no picture: the track is the
+ * sound's waveform, played by an <audio> of its own, and a handle held
+ * doesn't take the sound to its moment.
  */
 export function TrimEditor({
   media,
@@ -219,6 +232,7 @@ export function TrimEditor({
   onChange,
   locked,
   clip,
+  sound = false,
 }: ToolEditorProps & {
   /**
    * Seconds a fresh editor keeps from the middle of the video (all of a
@@ -226,8 +240,10 @@ export function TrimEditor({
    * Video to GIF starts. Without it, a fresh editor keeps the whole video.
    */
   clip?: number;
+  /** An audio file: a waveform for the track, and no picture. */
+  sound?: boolean;
 }) {
-  const video = useRef<HTMLVideoElement>(null);
+  const video = useRef<HTMLMediaElement>(null);
   /** The track's whole length, zoomed; it scrolls inside `viewport`. */
   const lane = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -238,6 +254,9 @@ export function TrimEditor({
   const [aspect, setAspect] = useState(16 / 9);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  /** The sound's loudness, `peaksPerSecond` a second: undefined while it is
+   *  read, null if it can't be. */
+  const [peaks, setPeaks] = useState<number[] | null>();
   /** The part of the track on show, in px, and how far along it is. */
   const [viewWidth, setViewWidth] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -267,6 +286,26 @@ export function TrimEditor({
   useEffect(() => {
     if (source?.aspect) setAspect(source.aspect);
   }, [source]);
+
+  // Its waveform, once its length is known (to ask for enough peaks); the
+  // main process keeps it for the next time.
+  useEffect(() => {
+    setPeaks(undefined);
+    if (!sound || !media || !duration) return;
+    let live = true;
+    const count = Math.round(
+      clamp(duration * peaksPerSecond, 1, maxWaveformPeaks),
+    );
+    window.media
+      .waveform(media, count)
+      .then((found) => live && setPeaks(found))
+      .catch(() => live && setPeaks(null));
+    return () => {
+      live = false;
+    };
+    // Once per file and length.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sound, mediaKey, duration]);
 
   // The width on show, for the frames, ruler and handles.
   useLayoutEffect(() => {
@@ -429,7 +468,8 @@ export function TrimEditor({
    *  moment, while it is moved); the next play or seek goes back to it. */
   const peek = (seconds: number) => {
     const element = video.current;
-    if (!element) return;
+    // A sound has no picture to show it by: it plays on.
+    if (!element || sound) return;
     if (!element.paused) {
       // The playhead stays where playing had got to.
       element.pause();
@@ -441,7 +481,7 @@ export function TrimEditor({
   /** Back to the playhead's frame after a peek (if not playing). */
   const unpeek = () => {
     const element = video.current;
-    if (!element) return;
+    if (!element || sound) return;
     if (
       element.paused &&
       (queued.current !== null || element.currentTime !== time)
@@ -517,8 +557,10 @@ export function TrimEditor({
       }
       onKeyRef.current(event);
     };
-    window.addEventListener('keydown', listen);
-    return () => window.removeEventListener('keydown', listen);
+    // Captured, so it hears Space before the canvas (whose Space held
+    // pans it), which mounted first.
+    window.addEventListener('keydown', listen, true);
+    return () => window.removeEventListener('keydown', listen, true);
   }, []);
 
   const x = (seconds: number) =>
@@ -815,47 +857,66 @@ export function TrimEditor({
   const tagLeft =
     clamp(x(time) - tagWidth / 2, 0, Math.max(0, width - tagWidth)) - x(time);
 
+  /** What the <video> (or a sound's <audio>) reports, either way. */
+  const playerProps = {
+    src: source?.url,
+    preload: 'auto',
+    onLoadedMetadata: (event: SyntheticEvent<HTMLMediaElement>) => {
+      const element = event.currentTarget;
+      if (Number.isFinite(element.duration)) setDuration(element.duration);
+      if (
+        element instanceof HTMLVideoElement &&
+        element.videoWidth &&
+        element.videoHeight
+      ) {
+        setAspect(element.videoWidth / element.videoHeight);
+      }
+    },
+    onSeeked,
+    onError: recover,
+    onPlay: () => setPlaying(true),
+    onPause: () => setPlaying(false),
+    onEnded: () => setPlaying(false),
+  };
+  /** Until it can play: getting it ready, or why it can't. */
+  const waiting = failed ? (
+    failed
+  ) : (
+    <span className="flex items-center gap-2">
+      <LoaderCircle size={14} className="animate-spin" />
+      Getting the {sound ? 'sound' : 'video'} ready…
+    </span>
+  );
+  const whole = sound ? 'File' : 'Video';
+
   return (
     <div className="flex flex-col gap-3">
-      {/* The video. */}
-      <div className="relative aspect-video overflow-hidden rounded-2xl bg-black">
-        {source && (
-          <video
-            ref={video}
-            src={source.url}
-            preload="auto"
-            playsInline
-            onClick={toggle}
-            onLoadedMetadata={(event) => {
-              const element = event.currentTarget;
-              if (Number.isFinite(element.duration)) {
-                setDuration(element.duration);
-              }
-              if (element.videoWidth && element.videoHeight) {
-                setAspect(element.videoWidth / element.videoHeight);
-              }
-            }}
-            onSeeked={onSeeked}
-            onError={recover}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onEnded={() => setPlaying(false)}
-            className="size-full cursor-pointer object-contain"
+      {sound ? (
+        // Heard, not seen: the timeline is all there is.
+        source && (
+          <audio
+            ref={video as RefObject<HTMLAudioElement | null>}
+            {...playerProps}
           />
-        )}
-        {!source && (
-          <span className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-white/70">
-            {failed ? (
-              failed
-            ) : (
-              <span className="flex items-center gap-2">
-                <LoaderCircle size={14} className="animate-spin" />
-                Getting the video ready…
-              </span>
-            )}
-          </span>
-        )}
-      </div>
+        )
+      ) : (
+        <div className="relative aspect-video overflow-hidden rounded-2xl bg-black">
+          {source && (
+            <video
+              ref={video as RefObject<HTMLVideoElement | null>}
+              {...playerProps}
+              playsInline
+              onClick={toggle}
+              className="size-full cursor-pointer object-contain"
+            />
+          )}
+          {!source && (
+            <span className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-white/70">
+              {waiting}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* The timeline: where the playhead is, and what is kept. */}
       <div
@@ -933,9 +994,31 @@ export function TrimEditor({
               )}
             </div>
 
+            {/* A sound's track: its waveform, the part on show drawn. */}
+            {sound && (
+              <div className="relative h-20 overflow-hidden rounded-lg bg-group">
+                {source && duration ? (
+                  <WaveTrack
+                    peaks={peaks}
+                    duration={duration}
+                    width={width}
+                    scrollLeft={scrollLeft}
+                    viewWidth={viewWidth}
+                  />
+                ) : (
+                  <span className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-ink-soft">
+                    {waiting}
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* The video track: frames along its length. */}
-            <div className="relative h-14 overflow-hidden rounded-lg bg-group">
-              {media &&
+            <div
+              className={`relative h-14 overflow-hidden rounded-lg bg-group ${sound ? 'hidden' : ''}`}
+            >
+              {!sound &&
+                media &&
                 duration &&
                 Array.from(
                   { length: Math.max(0, lastTile - firstTile + 1) },
@@ -1052,10 +1135,10 @@ export function TrimEditor({
               <button
                 type="button"
                 onClick={() => zoomTo(1)}
-                title="Show the whole video"
+                title={`Show the whole ${whole.toLowerCase()}`}
                 className={smallButton}
               >
-                Whole Video
+                Whole {whole}
               </button>
             )}
             <button
@@ -1108,6 +1191,93 @@ export function TrimEditor({
  */
 export function GifClipEditor(props: ToolEditorProps) {
   return <TrimEditor {...props} clip={5} />;
+}
+
+/**
+ * Trim Audio's timeline: Trim Video's, with the sound's waveform along the
+ * track in place of frames, and no picture.
+ */
+export function AudioTrimEditor(props: ToolEditorProps) {
+  return <TrimEditor {...props} sound />;
+}
+
+/**
+ * A sound's waveform along the timeline: a bar every few pixels, as tall as
+ * the loudest moment under it, drawn on a canvas the size of the part on
+ * show (the whole track, zoomed in, may be far wider than a canvas can be),
+ * which moves along with it. Its colour is its `text-` class. Pulses while the sound is read; flat if it can't be.
+ */
+function WaveTrack({
+  peaks,
+  duration,
+  width,
+  scrollLeft,
+  viewWidth,
+}: {
+  peaks: number[] | null | undefined;
+  duration: number;
+  /** The whole track's width, zoomed, and the part on show, in px. */
+  width: number;
+  scrollLeft: number;
+  viewWidth: number;
+}) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+
+  useLayoutEffect(() => {
+    const element = canvas.current;
+    const context = element?.getContext('2d');
+    if (!element || !context || !viewWidth || !width) return;
+    const ratio = window.devicePixelRatio || 1;
+    const height = element.clientHeight;
+    element.width = Math.round(viewWidth * ratio);
+    element.height = Math.round(height * ratio);
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, viewWidth, height);
+    context.fillStyle = getComputedStyle(element).color;
+    const middle = height / 2;
+    const most = height - 12;
+    // Bars sit on whole steps along the track, so they stay put as it
+    // scrolls; the first may start just off the left edge.
+    const first = Math.floor(scrollLeft / barPitch);
+    const last = Math.ceil((scrollLeft + viewWidth) / barPitch);
+    const count = peaks?.length ?? 0;
+    for (let bar = first; bar <= last; bar++) {
+      const from = (bar * barPitch) / width;
+      const to = ((bar + 1) * barPitch) / width;
+      if (from >= 1) break;
+      let loudest = 0;
+      if (count) {
+        const a = Math.floor(from * count);
+        const b = Math.max(a + 1, Math.ceil(to * count));
+        for (let at = a; at < b && at < count; at++) {
+          loudest = Math.max(loudest, peaks![at]);
+        }
+      }
+      // Quiet parts still show as a short bar, as music players draw them.
+      const tall = Math.max(2, loudest * most);
+      context.beginPath();
+      context.roundRect(
+        bar * barPitch - scrollLeft,
+        middle - tall / 2,
+        barWidth,
+        tall,
+        1,
+      );
+      context.fill();
+    }
+  }, [peaks, duration, width, scrollLeft, viewWidth]);
+
+  return (
+    <canvas
+      ref={canvas}
+      aria-hidden
+      className={`absolute inset-y-0 h-full text-brand ${
+        peaks === undefined ? 'animate-pulse opacity-40' : ''
+      }`}
+      // It moves along as the track scrolls, to stay on show.
+      style={{ left: scrollLeft, width: viewWidth }}
+    />
+  );
 }
 
 /**

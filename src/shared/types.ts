@@ -423,7 +423,8 @@ export type MediaApi = {
   /** Its frame `seconds` in, `height` pixels tall, as a data: URL. */
   frame(ref: MediaRef, seconds: number, height: number): Promise<string | null>;
   /** How loud its audio track `track` (the first by default) is along its
-   *  length, as `count` peaks from 0 to 1; null if it has no sound. */
+   *  length, as `count` peaks from 0 to 1 (up to `maxWaveformPeaks`);
+   *  null if it has no sound. */
   waveform(
     ref: MediaRef,
     count: number,

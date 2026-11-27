@@ -3,6 +3,10 @@
 import type { ToolkitId } from './toolkits';
 import type { ErrorAction, ErrorCategory } from './types';
 
+/** The most peaks `window.media.waveform` makes for one file: 100 a
+ *  second for over half an hour, as Trim Audio's timeline asks. */
+export const maxWaveformPeaks = 200_000;
+
 export const IPC = {
   probe: 'dl:probe',
   enqueue: 'dl:enqueue',

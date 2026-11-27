@@ -340,6 +340,8 @@ export function Canvas({ children }: { children: ReactNode }) {
       if (
         event.code !== 'Space' ||
         event.repeat ||
+        // An editor's Space (play and pause) comes first.
+        event.defaultPrevented ||
         !ours ||
         typing(target) ||
         document.querySelector('[aria-modal="true"]')

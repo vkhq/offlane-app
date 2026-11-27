@@ -108,8 +108,10 @@ export function useEditorPlayback(mediaKey: string) {
       event.preventDefault();
       toggleRef.current();
     };
-    window.addEventListener('keydown', listen);
-    return () => window.removeEventListener('keydown', listen);
+    // Captured, so it hears Space before the canvas (whose Space held
+    // pans it), which mounted first.
+    window.addEventListener('keydown', listen, true);
+    return () => window.removeEventListener('keydown', listen, true);
   }, []);
 
   const videoProps = {
