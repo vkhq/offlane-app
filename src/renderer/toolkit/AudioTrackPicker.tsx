@@ -8,8 +8,9 @@ import {
 } from '../../shared/audioTracks';
 import { formatList, parseList } from '../../shared/tools';
 import type { MediaRef } from '../../shared/types';
-import { Check, LoaderCircle } from '../components/icons';
+import { LoaderCircle } from '../components/icons';
 import { AudioPlayer } from './AudioPlayer';
+import { PickBox } from './PickBox';
 import type { PlayerFile } from './PlayerModal';
 import {
   PlayButton,
@@ -82,35 +83,6 @@ function VideoPreview({ media }: { media: MediaRef }) {
         <span />
       </div>
     </div>
-  );
-}
-
-/** The box that picks a track, before its name. */
-function TrackBox({
-  on,
-  label,
-  disabled,
-  onToggle,
-}: {
-  on: boolean;
-  label: string;
-  disabled: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      aria-label={`Extract ${label}`}
-      disabled={disabled}
-      onClick={onToggle}
-      className={`grid size-5 shrink-0 place-items-center rounded-md transition-colors enabled:cursor-pointer disabled:cursor-default ${
-        on ? 'bg-flow text-white' : 'ring-[1.5px] ring-ink/25 ring-inset'
-      } ${disabled && !on ? 'opacity-40' : ''}`}
-    >
-      {on && <Check size={12} strokeWidth={3} />}
-    </button>
   );
 }
 
@@ -279,9 +251,9 @@ export function AudioTrackPicker({
               details={trackDetails(track)}
               dimmed={!on}
               leading={
-                <TrackBox
+                <PickBox
                   on={on}
-                  label={track.label}
+                  label={`Extract ${track.label}`}
                   disabled={locked}
                   onToggle={() => toggle(track.index)}
                 />

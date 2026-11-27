@@ -59,6 +59,9 @@ export type AudioStream = {
   bitrate: number | null;
   sampleRate: number | null;
   channels: number | null;
+  /** Bits a sample, for lossless sound (16, 24…); null for lossy sound,
+   *  which has none of its own. */
+  bits: number | null;
 };
 
 export type MediaInfo = {
@@ -70,6 +73,8 @@ export type MediaInfo = {
   video: VideoStream | null;
   /** The first audio stream, or null. */
   audio: AudioStream | null;
+  /** The codec of the first cover art picture (mjpeg, png…), or null. */
+  cover: string | null;
 };
 
 /** A positive number from ffprobe's text, or null. */
@@ -104,7 +109,7 @@ export async function probeMedia(
       '-v',
       'error',
       '-show_entries',
-      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate,sample_rate,channels:stream_side_data=rotation:stream_disposition=attached_pic',
+      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate,sample_rate,channels,bits_per_raw_sample,bits_per_sample:stream_side_data=rotation:stream_disposition=attached_pic',
       '-of',
       'json',
       fileInput(input),
@@ -132,6 +137,10 @@ export async function probeMedia(
       stream.codec_type === 'video' && !stream.disposition?.attached_pic,
   );
   const audio = streams.find((stream) => stream.codec_type === 'audio');
+  const cover = streams.find(
+    (stream) =>
+      stream.codec_type === 'video' && stream.disposition?.attached_pic,
+  );
   let videoStream: VideoStream | null = null;
   if (video && positive(video.width) && positive(video.height)) {
     // ffprobe gives it as -90, 90, 180…; kept here as 0–359.
@@ -157,8 +166,13 @@ export async function probeMedia(
           bitrate: positive(audio.bit_rate),
           sampleRate: positive(audio.sample_rate),
           channels: positive(audio.channels),
+          // FLAC and ALAC give their depth as raw bits; PCM as bits a sample.
+          bits:
+            positive(audio.bits_per_raw_sample) ??
+            positive(audio.bits_per_sample),
         }
       : null,
+    cover: cover ? String(cover.codec_name ?? '') : null,
   };
 }
 
@@ -272,62 +286,191 @@ export async function h264Args(
   ];
 }
 
-/** The audio formats the audio tools offer, as their options name them. */
-export const audioFormats = ['MP3', 'M4A', 'WAV', 'FLAC', 'OGG'] as const;
+/** The audio formats the audio tools offer, as their options name them.
+ *  ALAC is Apple Lossless, in an .m4a file. */
+export const audioFormats = [
+  'MP3',
+  'M4A',
+  'WAV',
+  'FLAC',
+  'OGG',
+  'Opus',
+  'AIFF',
+  'ALAC',
+] as const;
 export type AudioFormat = (typeof audioFormats)[number];
+
+/** The formats that are lossless, so a bitrate means nothing for them. */
+export const losslessFormats = ['WAV', 'FLAC', 'AIFF', 'ALAC'] as const;
 
 /** Whether a format is lossless, so a bitrate means nothing for it. */
 export const lossless = (format: string) =>
-  format === 'WAV' || format === 'FLAC';
+  (losslessFormats as readonly string[]).includes(format);
+
+/** Codecs that keep every sample as it was recorded. Everything else
+ *  (MP3, AAC, Vorbis, Opus, WMA…) left some of the sound out. */
+export const losslessCodec = (codec: string) =>
+  codec.startsWith('pcm_') ||
+  [
+    'flac',
+    'alac',
+    'wavpack',
+    'ape',
+    'tta',
+    'wmalossless',
+    'mlp',
+    'truehd',
+    'als',
+  ].includes(codec);
+
+/** What `audioArgs` needs to know of the sound it encodes, to keep within
+ *  what the format holds and to keep its bit depth. */
+export type AudioSource = Pick<AudioStream, 'sampleRate' | 'channels'> &
+  Partial<Pick<AudioStream, 'codec' | 'bits'>>;
+
+/** What a format can hold, where it holds less than a source may have. */
+const formatLimits: Partial<
+  Record<string, { sampleRate?: number; channels?: number }>
+> = {
+  MP3: { sampleRate: 48_000, channels: 2 },
+  // Apple's AAC encoder refuses anything over 48 kHz.
+  M4A: { sampleRate: 48_000, channels: 8 },
+  FLAC: { channels: 8 },
+  ALAC: { channels: 8 },
+  OGG: { channels: 8 },
+  Opus: { channels: 8 },
+};
+
+/**
+ * Vorbis's quality (0–10) for about `kbps` in stereo. libvorbis refuses a
+ * bitrate it can't make at the source's rate and channels (320 kbps in
+ * mono, or at 96 kHz), so it is given a quality, which it always takes.
+ */
+export function vorbisQuality(kbps: number) {
+  const steps: [number, number][] = [
+    [64, 0],
+    [80, 1],
+    [96, 2],
+    [112, 3],
+    [128, 4],
+    [160, 5],
+    [192, 6],
+    [224, 7],
+    [256, 8],
+    [320, 9],
+  ];
+  if (kbps <= steps[0][0]) return 0;
+  for (let i = 1; i < steps.length; i++) {
+    const [hiKbps, hiQ] = steps[i];
+    const [loKbps, loQ] = steps[i - 1];
+    if (kbps <= hiKbps) {
+      const q = loQ + ((kbps - loKbps) / (hiKbps - loKbps)) * (hiQ - loQ);
+      return Math.round(q * 10) / 10;
+    }
+  }
+  return 9;
+}
+
+/** The uncompressed sample format that keeps a source's bit depth: float
+ *  stays float, 17–24 bits stay 24, more stay 32, and the rest (and every
+ *  lossy source, which has no bit depth of its own) are 16. */
+function pcmFor(source: AudioSource | null, endian: 'le' | 'be') {
+  const codec = source?.codec ?? '';
+  if (/^pcm_f(32|64)/.test(codec)) return `pcm_f32${endian}`;
+  const bits = codec && losslessCodec(codec) ? (source?.bits ?? 16) : 16;
+  const depth = bits > 24 ? 32 : bits > 16 ? 24 : 16;
+  return `pcm_s${depth}${endian}`;
+}
 
 /**
  * The encoder arguments and file extension for one of `audioFormats`, at
- * `kbps` where the format takes a bitrate (MP3, M4A, OGG). Throws a message
- * a person can act on for an unknown format or a missing encoder.
+ * `kbps` where the format takes a bitrate (MP3, M4A, OGG, Opus). Throws a
+ * message a person can act on for an unknown format or a missing encoder.
+ *
+ * Given the `source` sound, it also keeps within what the format holds
+ * (MP3: stereo at up to 48 kHz; M4A: up to 48 kHz; most: up to 8
+ * channels), saying what it lowered in `fitted`, and WAV and AIFF keep its
+ * bit depth (FLAC and ALAC keep it on their own). Without one, WAV and
+ * AIFF are 16-bit.
  */
 export async function audioArgs(
   context: HandlerContext<unknown>,
   format: string,
   kbps = 192,
-): Promise<{ ext: string; args: string[] }> {
+  source: AudioSource | null = null,
+): Promise<{
+  ext: string;
+  args: string[];
+  fitted: { sampleRate?: number; channels?: number };
+}> {
   const { ffmpeg } = context.ffmpeg();
   const bitrate = ['-b:a', `${Math.round(kbps)}k`];
+  const limit = formatLimits[format] ?? {};
+  const fitted: { sampleRate?: number; channels?: number } = {};
+  if (limit.sampleRate && (source?.sampleRate ?? 0) > limit.sampleRate) {
+    fitted.sampleRate = limit.sampleRate;
+  }
+  if (limit.channels && (source?.channels ?? 0) > limit.channels) {
+    fitted.channels = limit.channels;
+  }
+  const fit = [
+    ...(fitted.sampleRate ? ['-ar', String(fitted.sampleRate)] : []),
+    ...(fitted.channels ? ['-ac', String(fitted.channels)] : []),
+  ];
+  const made = (ext: string, args: string[]) => ({
+    ext,
+    args: [...args, ...fit],
+    fitted,
+  });
   switch (format) {
     case 'MP3':
-      return {
-        ext: 'mp3',
-        args: [
-          '-c:a',
-          await pickEncoder(
-            ffmpeg,
-            ['libmp3lame'],
-            "This FFmpeg can't make MP3 files.",
-          ),
-          ...bitrate,
-        ],
-      };
+      return made('mp3', [
+        '-c:a',
+        await pickEncoder(
+          ffmpeg,
+          ['libmp3lame'],
+          "This FFmpeg can't make MP3 files.",
+        ),
+        ...bitrate,
+      ]);
     case 'M4A':
-      return {
-        ext: 'm4a',
-        args: ['-c:a', await pickAacEncoder(ffmpeg), ...bitrate],
-      };
+      return made('m4a', ['-c:a', await pickAacEncoder(ffmpeg), ...bitrate]);
+    case 'ALAC':
+      return made('m4a', ['-c:a', 'alac']);
     case 'WAV':
-      return { ext: 'wav', args: ['-c:a', 'pcm_s16le'] };
+      return made('wav', ['-c:a', pcmFor(source, 'le')]);
+    case 'AIFF':
+      // AIFF keeps its tags and cover art only as ID3.
+      return made('aiff', ['-c:a', pcmFor(source, 'be'), '-write_id3v2', '1']);
     case 'FLAC':
-      return { ext: 'flac', args: ['-c:a', 'flac'] };
+      return made('flac', ['-c:a', 'flac']);
     case 'OGG':
-      return {
-        ext: 'ogg',
-        args: [
-          '-c:a',
-          await pickEncoder(
-            ffmpeg,
-            ['libvorbis'],
-            "This FFmpeg can't make OGG files.",
-          ),
-          ...bitrate,
-        ],
-      };
+      return made('ogg', [
+        '-c:a',
+        await pickEncoder(
+          ffmpeg,
+          ['libvorbis'],
+          "This FFmpeg can't make OGG files.",
+        ),
+        '-q:a',
+        String(vorbisQuality(kbps)),
+      ]);
+    case 'Opus': {
+      // Opus takes up to 256 kbps a channel, and is always 48 kHz inside.
+      const channels = Math.min(8, source?.channels ?? 2);
+      return made('opus', [
+        '-c:a',
+        await pickEncoder(
+          ffmpeg,
+          ['libopus'],
+          "This FFmpeg can't make Opus files.",
+        ),
+        '-b:a',
+        `${Math.min(Math.round(kbps), 256 * channels)}k`,
+        '-ar',
+        '48000',
+      ]);
+    }
     default:
       throw new Error(
         `Offlane can't make ${format || 'that kind of'} audio files.`,
@@ -337,7 +480,7 @@ export async function audioArgs(
 
 /** Bits per second a lossy re-encode keeps from its source: the audio
  *  stream's, else the file's, within 64–320 kbps; 192 kbps if unknown. */
-const sourceAudioKbps = (media: MediaInfo) =>
+export const sourceAudioKbps = (media: MediaInfo) =>
   Math.min(
     320,
     Math.max(

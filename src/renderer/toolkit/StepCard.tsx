@@ -9,6 +9,7 @@ import { configOf, tools } from '../tools';
 import { useCanvas } from './Canvas';
 import { Arrow, FlowNode } from './Flow';
 import { noteToolJobs, useAllJobs, useConnected } from './jobs';
+import { StepSound } from './AudioFileDetails';
 import { type MediaItem, MediaStrip } from './MediaStrip';
 import { RunSection, runsLock } from './RunSection';
 import type { OptionHints, StandardTool } from './standardTool';
@@ -119,6 +120,9 @@ function StepCard({ step }: { step: Step }) {
   const isChosen = (index: number) =>
     Editor ? index === only : !skipped.includes(index);
   const chosen = step.inputs.filter((_, index) => isChosen(index));
+  const sounds =
+    step.inputs.length > 0 &&
+    step.inputs.every((input) => input.kind === 'audio');
   // Run, what it ran on is a record (see runsLock).
   const ran = runsLock(
     step.jobIds.map((id) => allJobs.find((job) => job.id === id)),
@@ -217,7 +221,24 @@ function StepCard({ step }: { step: Step }) {
         >
           {/* What it works on, as every stage shows its files; with an
               editor, only to pick which, among several. */}
-          {(!Editor || step.inputs.length > 1) && (
+          {(!Editor || step.inputs.length > 1) && sounds && (
+            // Sounds have no picture: each its own player, as the stage
+            // they came from shows them.
+            <div className="flex flex-col gap-3">
+              {step.inputs.map((input, index) => (
+                <StepSound
+                  key={`${input.source}:${input.jobId}:${input.index}`}
+                  input={input}
+                  ticked={isChosen(index)}
+                  pickable={step.inputs.length > 1}
+                  locked={ran}
+                  verb={Editor ? 'Pick' : 'Use'}
+                  onToggle={() => toggle(index)}
+                />
+              ))}
+            </div>
+          )}
+          {(!Editor || step.inputs.length > 1) && !sounds && (
             <div className="rounded-2xl bg-canvas px-4 py-3 shadow-card">
               <MediaStrip
                 // Sizes only where the tool is about them (see withSizes).

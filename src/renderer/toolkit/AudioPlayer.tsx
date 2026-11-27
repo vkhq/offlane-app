@@ -47,6 +47,7 @@ export function AudioPlayer({
   next,
   onMenu,
   leading,
+  trailing,
   dimmed = false,
 }: {
   file: PlayerFile;
@@ -59,6 +60,8 @@ export function AudioPlayer({
   onMenu?: () => void;
   /** Before its name: Extract Audio's box to pick the track. */
   leading?: ReactNode;
+  /** After its menu: an added file's ✕ to take it out. */
+  trailing?: ReactNode;
   /** Shown faded: a track not picked. */
   dimmed?: boolean;
 }) {
@@ -194,6 +197,7 @@ export function AudioPlayer({
             <Ellipsis size={16} />
           </button>
         )}
+        {trailing}
       </div>
 
       {wanted && (

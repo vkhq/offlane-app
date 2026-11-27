@@ -22,12 +22,6 @@ type Plan = { ext: string; args: string[]; note?: string };
 const sameAs = (track: AudioTrack) =>
   Math.min(320, Math.max(64, Math.round((track.bitrate ?? 192_000) / 1000)));
 
-/** What MP3 can't hold: over 48 kHz or two channels. */
-const mp3Limits = (track: AudioTrack) => [
-  ...(track.sampleRate && track.sampleRate > 48_000 ? ['-ar', '48000'] : []),
-  ...(track.channels && track.channels > 2 ? ['-ac', '2'] : []),
-];
-
 /**
  * How `track` is saved. Original copies it out untouched, in the audio
  * file type that holds its codec; one no audio file holds (AC-3, DTS,
@@ -41,19 +35,23 @@ async function planFor(
 ): Promise<Plan> {
   const kbps = bitrate === 'Same as Track' ? sameAs(track) : parseInt(bitrate);
   if (format !== 'Original') {
-    const made = await audioArgs(context, format, kbps);
-    return {
-      ...made,
-      args: [...made.args, ...(format === 'MP3' ? mp3Limits(track) : [])],
-    };
+    // Within what the format holds: MP3 is stereo at up to 48 kHz.
+    const { ext, args } = await audioArgs(context, format, kbps, track);
+    return { ext, args };
   }
   const { codec } = track;
   const { ext, how } = originalFile(codec);
   if (how === 'copy') return { ext, args: ['-c:a', 'copy'] };
   if (how === 'pcm') return { ext, args: ['-c:a', 'pcm_s24le'] };
-  const m4a = await audioArgs(context, 'M4A', sameAs(track));
+  const { ext: m4a, args } = await audioArgs(
+    context,
+    'M4A',
+    sameAs(track),
+    track,
+  );
   return {
-    ...m4a,
+    ext: m4a,
+    args,
     note: `${track.label} was ${codecName(codec)}, so it was saved as M4A.`,
   };
 }

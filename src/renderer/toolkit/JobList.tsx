@@ -1,11 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react';
 
-import {
-  type AudioFileInfo,
-  channelsName,
-  codecName,
-  formatName,
-} from '../../shared/audioTracks';
+import { type AudioFileInfo, soundDetails } from '../../shared/audioTracks';
 import { type FileKind, fileKindOf } from '../../shared/fileKinds';
 import type { ToolJob } from '../../shared/tools';
 import type { FilePreview } from '../../shared/types';
@@ -243,22 +238,11 @@ function JobCard({ job, next }: { job: ToolJob; next: ReactNode }) {
 }
 
 /** A sound's details as its card shows them: "M4A · AAC · Stereo ·
- *  48 kHz · 192 kbps · 1.2 MB"; the codec only where the file type doesn't
- *  already say it. */
-function soundDetails(output: string, info: AudioFileInfo | null) {
-  const ext = output.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '';
-  const type = ext ? formatName(ext) : '';
-  const [track] = info?.tracks ?? [];
-  const codec = track ? codecName(track.codec) : '';
-  return [
-    type,
-    codec && codec.toLowerCase() !== type.toLowerCase() && codec,
-    track && channelsName(track.channels),
-    track?.sampleRate && `${Math.round(track.sampleRate / 100) / 10} kHz`,
-    track?.bitrate && `${Math.round(track.bitrate / 1000)} kbps`,
-    info?.size && formatBytes(info.size),
-  ].filter(Boolean);
-}
+ *  48 kHz · 192 kbps · 1.2 MB" (see soundDetails). */
+const cardDetails = (output: string, info: AudioFileInfo | null) => [
+  ...soundDetails(output.match(/\.([a-z0-9]+)$/i)?.[1] ?? '', info),
+  info?.size ? formatBytes(info.size) : null,
+];
 
 /**
  * A finished sound: its own player, in place of the card, with what it is
@@ -288,7 +272,7 @@ function AudioResult({
     };
   }, [job.id, index]);
   const details = [
-    ...soundDetails(output, info),
+    ...cardDetails(output, info),
     // Its size until the file is read: the run's, for a run of one file.
     !info && job.outputs.length === 1 && job.outputSize !== undefined
       ? formatBytes(job.outputSize)

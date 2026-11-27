@@ -88,6 +88,7 @@ import changeSpeed from '../tools/video/change-speed/handler';
 import videoToGif from '../tools/video/video-to-gif/handler';
 import cleanUpAudio from '../tools/audio/clean-up-audio/handler';
 import extractAudio from '../tools/audio/extract-audio/handler';
+import convertAudio from '../tools/audio/convert-audio/handler';
 import { gifDelays, gifPlays } from '../shared/gif';
 import { lengthAt, parseSpeed, tempoSteps } from '../shared/speed';
 import { boxOf, dragBox, isWhole, shapeBox } from '../shared/cropBox';
@@ -107,7 +108,13 @@ import {
   withinLimits,
 } from '../shared/frameSize';
 import { audioFileInfo, audioTracks, frameAt, waveform } from '../main/media';
-import { formatName, originalFile, trackDetails } from '../shared/audioTracks';
+import {
+  formatName,
+  originalFile,
+  soundDetails,
+  tagLine,
+  trackDetails,
+} from '../shared/audioTracks';
 import { optionsFor } from '../tools/video/download-video/options';
 import { fileKindOf } from '../shared/fileKinds';
 import { resolveOutputs } from '../main/tools/outputs';
@@ -118,6 +125,7 @@ import {
   audioArgs,
   audioFormats,
   h264Args,
+  vorbisQuality,
   probeMedia,
   timeRange,
   videoArgs,
@@ -1697,8 +1705,11 @@ describe('tool queue', () => {
       ['MP3', true],
       ['M4A', true],
       ['OGG', true],
+      ['Opus', true],
       ['WAV', false],
       ['FLAC', false],
+      ['AIFF', false],
+      ['ALAC', false],
     ] as const) {
       assert.equal(
         isShown(convertAudioOptions, 'bitrate', { format }),
@@ -4427,6 +4438,291 @@ describe('tool queue', () => {
         rmSync(path.join(outDir(), name), { force: true });
     },
   );
+  test(
+    'Convert Audio makes every format, keeping what each can hold',
+    { skip: !hasEngine && 'no vendor binaries' },
+    async () => {
+      const dir = path.join(tmp, 'convert-audio');
+      await fs.mkdir(dir, { recursive: true });
+      const art = path.join(dir, 'cover.png');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'color=red:size=64x64',
+        '-frames:v',
+        '1',
+        art,
+      ]);
+      // A studio master: 96 kHz, 5.1, 24-bit FLAC, with cover art and tags.
+      const master = path.join(dir, 'master.flac');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:sample_rate=96000:duration=2',
+        '-i',
+        art,
+        '-filter_complex',
+        '[0]aformat=channel_layouts=5.1[a]',
+        '-map',
+        '[a]',
+        '-map',
+        '1',
+        '-c:a',
+        'flac',
+        '-sample_fmt',
+        's32',
+        '-bits_per_raw_sample',
+        '24',
+        '-c:v',
+        'copy',
+        '-disposition:v',
+        'attached_pic',
+        '-metadata',
+        'title=Master',
+        '-metadata',
+        'artist=Band',
+        '-metadata',
+        'album=Live',
+        master,
+      ]);
+      // A 128 kbps mono MP3.
+      const song = path.join(dir, 'song.mp3');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:sample_rate=44100:duration=2',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '128k',
+        song,
+      ]);
+      // An Ogg, which keeps its tags on the sound, not the file.
+      const ogg = path.join(dir, 'tune.ogg');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=2',
+        '-c:a',
+        'libvorbis',
+        '-metadata',
+        'title=Tune',
+        ogg,
+      ]);
+      // A float WAV, from a DAW.
+      const float = path.join(dir, 'mix.wav');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=2',
+        '-c:a',
+        'pcm_f32le',
+        float,
+      ]);
+      const silent = path.join(dir, 'silent.mp4');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=160x120:rate=10',
+        '-c:v',
+        'mpeg4',
+        silent,
+      ]);
+
+      type Probed = {
+        format: { bit_rate?: string; tags?: { title?: string } };
+        streams: {
+          codec_type: string;
+          codec_name: string;
+          sample_rate?: string;
+          channels?: number;
+          bits_per_raw_sample?: string;
+          bits_per_sample?: number;
+          tags?: { title?: string };
+          disposition?: { attached_pic?: number };
+        }[];
+      };
+      const probe = (file: string) =>
+        JSON.parse(
+          spawnSync(vendorFfprobe, [
+            '-v',
+            'error',
+            '-show_entries',
+            'format=bit_rate:format_tags=title:stream=codec_type,codec_name,sample_rate,channels,bits_per_raw_sample,bits_per_sample:stream_tags=title:stream_disposition=attached_pic',
+            '-of',
+            'json',
+            file,
+          ]).stdout.toString(),
+        ) as Probed;
+      /** What a converted file holds, as one line to compare. */
+      const describeOut = (file: string) => {
+        const probed = probe(file);
+        const sound = probed.streams.find((s) => s.codec_type === 'audio')!;
+        const bits =
+          Number(sound.bits_per_raw_sample) || sound.bits_per_sample || null;
+        return {
+          ext: path.extname(file),
+          codec: sound.codec_name,
+          rate: Number(sound.sample_rate),
+          channels: sound.channels,
+          bits,
+          cover: probed.streams.some((s) => s.disposition?.attached_pic === 1),
+          title: probed.format.tags?.title ?? sound.tags?.title ?? null,
+        };
+      };
+
+      // What an added file's row says of it: its tags (FLAC's, in capitals;
+      // an Ogg's, on its sound), and 24 bits for lossless sound only.
+      const masterInfo = await audioFileInfo(vendorFfprobe, master);
+      assert.deepEqual(soundDetails('flac', masterInfo).slice(0, 4), [
+        'FLAC',
+        '5.1',
+        '96 kHz',
+        '24-bit',
+      ]);
+      assert.match(soundDetails('flac', masterInfo)[4], /^\d+ kbps$/);
+      assert.equal(tagLine(masterInfo), 'Band – Master · Live');
+      const songInfo = await audioFileInfo(vendorFfprobe, song);
+      assert.deepEqual(soundDetails('mp3', songInfo), [
+        'MP3',
+        'Mono',
+        '44.1 kHz',
+        '128 kbps',
+      ]);
+      assert.equal(tagLine(songInfo), null);
+      assert.ok(Math.abs((songInfo.duration ?? 0) - 2) < 0.1);
+      assert.equal(tagLine(await audioFileInfo(vendorFfprobe, ogg)), 'Tune');
+      assert.deepEqual(
+        soundDetails('wav', await audioFileInfo(vendorFfprobe, float)).slice(
+          0,
+          4,
+        ),
+        ['WAV', 'PCM', 'Mono', '44.1 kHz'],
+      );
+
+      const tools = queue({ 'convert-audio': convertAudio });
+      const convert = async (file: string, values: Record<string, unknown>) => {
+        const [job] = tools.run('convert-audio', {
+          files: [file],
+          links: [],
+          values,
+        });
+        const done = await settled(tools, job.id);
+        const out = done.outputs[0] ? path.join(outDir(), done.outputs[0]) : '';
+        const info = out && done.status === 'done' ? describeOut(out) : null;
+        // Each is read and gone, so two .m4a never share a name.
+        for (const name of done.outputs)
+          rmSync(path.join(outDir(), name), { force: true });
+        return { ...done, info };
+      };
+
+      // The master, in every format: MP3 and M4A brought within what they
+      // hold, the rest keeping 96 kHz 5.1 and the lossless ones 24 bits;
+      // cover art wherever the format keeps it; the title everywhere.
+      const expected = {
+        MP3: ['.mp3', 'mp3', 48_000, 2, null, true],
+        M4A: ['.m4a', 'aac', 48_000, 6, null, true],
+        WAV: ['.wav', 'pcm_s24le', 96_000, 6, 24, false],
+        FLAC: ['.flac', 'flac', 96_000, 6, 24, true],
+        OGG: ['.ogg', 'vorbis', 96_000, 6, null, false],
+        Opus: ['.opus', 'opus', 48_000, 6, null, false],
+        AIFF: ['.aiff', 'pcm_s24be', 96_000, 6, 24, true],
+        ALAC: ['.m4a', 'alac', 96_000, 6, 24, true],
+      } as const;
+      const notes: Record<string, string | undefined> = {};
+      for (const [
+        format,
+        [ext, codec, rate, channels, bits, cover],
+      ] of Object.entries(expected)) {
+        const done = await convert(master, { format, bitrate: '192 kbps' });
+        assert.equal(done.status, 'done', `${format}: ${done.error ?? ''}`);
+        assert.deepEqual(
+          done.info,
+          { ext, codec, rate, channels, bits, cover, title: 'Master' },
+          format,
+        );
+        notes[format] = done.note;
+      }
+      assert.equal(
+        notes.MP3,
+        'Mixed to stereo and saved at 48 kHz, the most MP3 holds.',
+      );
+      assert.equal(notes.M4A, 'Saved at 48 kHz, the most M4A holds.');
+      // Opus is always 48 kHz, so it says nothing of it.
+      for (const format of ['WAV', 'FLAC', 'OGG', 'Opus', 'AIFF', 'ALAC']) {
+        assert.equal(notes[format], undefined, format);
+      }
+
+      // A lossy MP3 made lossless says it is no better, only bigger; made
+      // 320 kbps, that it's no better than its 128.
+      const wav = await convert(song, { format: 'WAV' });
+      assert.equal(wav.info?.codec, 'pcm_s16le');
+      assert.match(wav.note ?? '', /MP3 had already left some sound out/);
+      const up = await convert(song, { format: 'MP3', bitrate: '320 kbps' });
+      assert.match(up.note ?? '', /was 128 kbps, so 320 kbps makes it bigger/);
+      // Same as File keeps its 128 kbps, and says nothing.
+      const same = await convert(song, {
+        format: 'M4A',
+        bitrate: 'Same as File',
+      });
+      assert.equal(same.status, 'done', same.error ?? '');
+      assert.equal(same.note, undefined);
+      // 320 kbps in mono: Vorbis and Opus still make it.
+      for (const format of ['OGG', 'Opus']) {
+        const mono = await convert(song, { format, bitrate: '320 kbps' });
+        assert.equal(mono.status, 'done', `${format}: ${mono.error ?? ''}`);
+        assert.equal(mono.info?.channels, 1, format);
+      }
+
+      // An Ogg's title, kept on its sound, reaches the MP3.
+      const fromOgg = await convert(ogg, { format: 'MP3' });
+      assert.equal(fromOgg.info?.title, 'Tune');
+
+      // Float stays float in WAV and AIFF; FLAC holds 24 bits.
+      assert.equal(
+        (await convert(float, { format: 'WAV' })).info?.codec,
+        'pcm_f32le',
+      );
+      assert.equal(
+        (await convert(float, { format: 'AIFF' })).info?.codec,
+        'pcm_f32be',
+      );
+      assert.equal((await convert(float, { format: 'FLAC' })).info?.bits, 24);
+
+      // No sound fails with why.
+      const mute = await convert(silent, { format: 'MP3' });
+      assert.equal(mute.status, 'failed');
+      assert.match(mute.error ?? '', /no sound to convert/);
+
+      // Cancelled, it leaves nothing behind.
+      const long = path.join(dir, 'long.wav');
+      ffmpegOk([
+        '-f',
+        'lavfi',
+        '-i',
+        'anoisesrc=duration=600:sample_rate=44100',
+        '-c:a',
+        'pcm_s16le',
+        long,
+      ]);
+      const [slow] = tools.run('convert-audio', {
+        files: [long],
+        links: [],
+        values: { format: 'MP3', bitrate: '320 kbps' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      tools.cancel(slow.id);
+      const cancelled = await settled(tools, slow.id);
+      assert.equal(cancelled.status, 'cancelled');
+      assert.ok(!existsSync(path.join(outDir(), 'long.mp3')));
+    },
+  );
 });
 
 const vendorFfmpeg = path.join(
@@ -4757,6 +5053,9 @@ describe(
         WAV: 'pcm_s16le',
         FLAC: 'flac',
         OGG: 'vorbis',
+        Opus: 'opus',
+        AIFF: 'pcm_s16be',
+        ALAC: 'alac',
       };
       for (const format of audioFormats) {
         const { ext, args } = await audioArgs(context, format, 128);
@@ -4765,7 +5064,50 @@ describe(
         const media = await probeMedia(context, output);
         assert.equal(media.audio?.codec, codecs[format], format);
       }
-      await assert.rejects(audioArgs(context, 'AIFF'), /can't make AIFF/);
+      await assert.rejects(audioArgs(context, 'WMA'), /can't make WMA/);
+      // Given the sound, each keeps within what it holds: MP3 stereo at up
+      // to 48 kHz; WAV and AIFF keep 24 bits, and float stays float.
+      const hiRes = {
+        sampleRate: 96_000,
+        channels: 6,
+        codec: 'flac',
+        bits: 24,
+      };
+      const mp3 = await audioArgs(context, 'MP3', 192, hiRes);
+      assert.deepEqual(mp3.fitted, { sampleRate: 48_000, channels: 2 });
+      assert.deepEqual(mp3.args.slice(-4), ['-ar', '48000', '-ac', '2']);
+      assert.deepEqual((await audioArgs(context, 'FLAC', 0, hiRes)).fitted, {});
+      assert.ok(
+        (await audioArgs(context, 'WAV', 0, hiRes)).args.includes('pcm_s24le'),
+      );
+      assert.ok(
+        (await audioArgs(context, 'AIFF', 0, hiRes)).args.includes('pcm_s24be'),
+      );
+      const float = {
+        sampleRate: 44_100,
+        channels: 2,
+        codec: 'pcm_f32le',
+        bits: 32,
+      };
+      assert.ok(
+        (await audioArgs(context, 'WAV', 0, float)).args.includes('pcm_f32le'),
+      );
+      // A lossy source's bits mean nothing: 16-bit.
+      const lossy = { sampleRate: 44_100, channels: 2, codec: 'mp3', bits: 32 };
+      assert.ok(
+        (await audioArgs(context, 'WAV', 0, lossy)).args.includes('pcm_s16le'),
+      );
+      // Opus takes up to 256 kbps a channel.
+      const mono = { sampleRate: 44_100, channels: 1 };
+      assert.ok(
+        (await audioArgs(context, 'Opus', 320, mono)).args.includes('256k'),
+      );
+      // Vorbis is given a quality, for about the bitrate in stereo.
+      assert.deepEqual(
+        [64, 128, 192, 256, 320, 400].map(vorbisQuality),
+        [0, 4, 6, 8, 9, 9],
+      );
+      assert.equal(vorbisQuality(144), 4.5);
     });
 
     test('videoArgs makes every video format', async () => {

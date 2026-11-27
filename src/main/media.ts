@@ -196,7 +196,7 @@ export function audioFileInfo(
       '-v',
       'error',
       '-show_entries',
-      'stream=codec_type,codec_name,channels,sample_rate,bit_rate:stream_disposition=default,attached_pic:stream_tags:format=nb_streams,bit_rate,size,duration',
+      'stream=codec_type,codec_name,channels,sample_rate,bit_rate,bits_per_raw_sample,bits_per_sample:stream_disposition=default,attached_pic:stream_tags:format=nb_streams,bit_rate,size,duration:format_tags',
       '-of',
       'json',
       `file:${file}`,
@@ -216,7 +216,9 @@ export function audioFileInfo(
           streams?: (ProbedAudioStream & {
             disposition?: { attached_pic?: number };
           })[];
-          format?: Record<string, string | number | undefined>;
+          format?: Record<string, unknown> & {
+            tags?: Record<string, string | undefined>;
+          };
         };
         const number = (value: unknown) => {
           const found = Number(value);
@@ -232,10 +234,26 @@ export function audioFileInfo(
         if (alone && !tracks[0].bitrate && fileRate) {
           tracks = [{ ...tracks[0], bitrate: fileRate }];
         }
+        // Ogg keeps its tags on the sound, not the file; any case.
+        const tagged = (key: string) => {
+          const sources = [probed.format?.tags, streams[0]?.tags];
+          for (const tags of sources) {
+            const found = Object.entries(tags ?? {}).find(
+              ([name]) => name.toLowerCase() === key,
+            )?.[1];
+            if (found?.trim()) return found.trim();
+          }
+          return null;
+        };
         resolve({
           tracks,
           size: number(probed.format?.size),
           duration: number(probed.format?.duration),
+          tags: {
+            title: tagged('title'),
+            artist: tagged('artist'),
+            album: tagged('album'),
+          },
         });
       } catch {
         reject(new Error("Can't read this file's audio."));

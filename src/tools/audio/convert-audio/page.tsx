@@ -1,8 +1,14 @@
-import { dropAudio, standardTool } from '../../ui';
+import { drop, standardTool } from '../../ui';
 import { options } from './options';
 
 export default standardTool({
-  input: dropAudio(),
+  // Files only: a link would need downloading first (Download Video).
+  input: drop(
+    'audio',
+    'audio/*',
+    'MP3, M4A, WAV, FLAC, OGG, AIFF and WMA',
+    false,
+  ),
   options,
   action: 'Convert',
 });

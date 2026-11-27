@@ -18,6 +18,9 @@ export type AudioTrack = {
   sampleRate: number | null;
   /** Bits per second, or null if unknown. */
   bitrate: number | null;
+  /** Bits a sample (16, 24…) for lossless sound; null for lossy sound,
+   *  which has none of its own. */
+  bits: number | null;
   /** The track a player picks first. */
   isDefault: boolean;
 };
@@ -29,6 +32,8 @@ export type AudioFileInfo = {
   size: number | null;
   /** Seconds, or null if unknown. */
   duration: number | null;
+  /** What its tags say it is, where they say. */
+  tags: { title: string | null; artist: string | null; album: string | null };
 };
 
 /** A stream as ffprobe's JSON gives it, as far as tracks need. */
@@ -38,6 +43,8 @@ export type ProbedAudioStream = {
   channels?: number;
   sample_rate?: string | number;
   bit_rate?: string | number;
+  bits_per_raw_sample?: string | number;
+  bits_per_sample?: string | number;
   disposition?: { default?: number };
   tags?: Record<string, string | undefined>;
 };
@@ -81,6 +88,11 @@ export function audioTracksFrom(streams: ProbedAudioStream[]): AudioTrack[] {
       // MKV keeps it in a tag, not the stream.
       bitrate:
         positive(stream.bit_rate) ?? positive(tags.BPS ?? tags['BPS-eng']),
+      // FLAC and ALAC say it as raw bits; PCM as bits a sample. A lossy
+      // codec's decoder says 0 or nothing.
+      bits:
+        positive(stream.bits_per_raw_sample) ??
+        positive(stream.bits_per_sample),
       isDefault: stream.disposition?.default === 1,
     };
   });
@@ -135,6 +147,33 @@ export function channelsName(channels: number | null) {
     default:
       return `${channels} channels`;
   }
+}
+
+/**
+ * A sound file's details, as its row or card shows them: "MP3 · Stereo ·
+ * 44.1 kHz · 128 kbps", or "FLAC · 5.1 · 96 kHz · 24-bit · 2,304 kbps";
+ * the codec only where the file type (from `ext`) doesn't already say it
+ * ("M4A · ALAC"). Its first track's; the size and length are the caller's.
+ */
+export function soundDetails(ext: string, info: AudioFileInfo | null) {
+  const type = ext ? formatName(ext.toLowerCase()) : '';
+  const [track] = info?.tracks ?? [];
+  const codec = track ? codecName(track.codec) : '';
+  return [
+    type,
+    codec && codec.toLowerCase() !== type.toLowerCase() ? codec : null,
+    track ? channelsName(track.channels) : null,
+    track?.sampleRate ? `${Math.round(track.sampleRate / 100) / 10} kHz` : null,
+    track?.bits ? `${track.bits}-bit` : null,
+    track?.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : null,
+  ].filter((part): part is string => Boolean(part));
+}
+
+/** "Artist – Title · Album", from a file's tags; null when it has none. */
+export function tagLine(info: AudioFileInfo | null) {
+  const { title, artist, album } = info?.tags ?? {};
+  const name = [artist, title].filter(Boolean).join(' – ');
+  return [name, album].filter(Boolean).join(' · ') || null;
 }
 
 /** A track's details, as its row shows them: "AAC · Stereo · 48 kHz · 192 kbps". */

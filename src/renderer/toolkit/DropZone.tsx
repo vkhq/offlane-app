@@ -24,6 +24,7 @@ import {
 } from '../components/icons';
 import { UrlInput } from '../components/UrlInput';
 import { itemPreview } from '../sessions';
+import { AddedSound } from './AudioFileDetails';
 import { type MediaItem, MediaStrip } from './MediaStrip';
 import type { DropInput, FileKind } from './inputs';
 import { invalidLink, toLink } from './links';
@@ -79,9 +80,11 @@ export const kindIcons: Record<FileKind, AppIcon> = {
  *
  * Videos show as every stage's files do (see MediaStrip): the drop zone
  * stays, so adding more is always in reach, and under it a strip of their
- * frames with their lengths (and sizes, see withSizes), each with a ✕ to take it out. Other
- * files, and videos whose order matters, show as a list to remove from or
- * put in order.
+ * frames with their lengths (and sizes, see withSizes), each with a ✕ to take it out. Sounds
+ * show as their results do, each its own player with its waveform and
+ * what it is (see AddedSound), and a row under them to add more. Other
+ * files, and videos or sounds whose order matters, show as a list to
+ * remove from or put in order.
  */
 export function DropZone({
   input,
@@ -153,6 +156,9 @@ export function DropZone({
 
   const browse = () => picker.current?.click();
   const strip = input.files === 'video' && !input.ordered;
+  // Sounds show as their results do, each its own player; in a list
+  // still where their order matters, to drag them into it.
+  const players = input.files === 'audio' && !input.ordered;
   const addMore = !locked && (
     <li className={row}>
       <span className={tile}>
@@ -165,13 +171,36 @@ export function DropZone({
     </li>
   );
 
+  const urlRow = (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        addLink(link);
+      }}
+      className={`${row} ${items.length === 0 || strip ? 'mt-2' : ''}`}
+    >
+      <span className={tile}>
+        <Globe size={15} />
+      </span>
+      <label htmlFor={urlId} className={rowLabel}>
+        Add from URL
+      </label>
+      <UrlInput
+        id={urlId}
+        value={link}
+        onChange={onLinkChange}
+        className="h-7.5 w-60 rounded-lg px-2.5"
+      />
+    </form>
+  );
+
   return (
     // Once there are files, a card like the results': white, lifted, with a
     // hairline between its rows (Add from URL among them). Videos keep the
     // drop zone, their strip in a card of its own below it (see MediaStrip).
     <div
       className={
-        items.length > 0 && !strip
+        items.length > 0 && !strip && !players
           ? 'divide-y divide-hairline rounded-2xl bg-canvas px-4 shadow-card'
           : ''
       }
@@ -235,7 +264,53 @@ export function DropZone({
             <FolderOpen size={13} />
           </button>
         </div>
-      ) : strip ? null : (
+      ) : strip ? null : players ? (
+        <div className="flex flex-col gap-3">
+          {items.map((item, index) =>
+            typeof item === 'string' ? (
+              <div
+                key={keys[index]}
+                className={`${row} rounded-2xl bg-canvas px-4 shadow-card`}
+              >
+                <span className={tile}>
+                  <Link2 size={15} />
+                </span>
+                <span className={rowLabel}>
+                  {item.replace(/^https?:\/\//, '')}
+                </span>
+                {!locked && (
+                  <button
+                    type="button"
+                    aria-label="Remove link"
+                    onClick={() =>
+                      onItemsChange(items.filter((_, i) => i !== index))
+                    }
+                    className={iconButton}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <AddedSound
+                key={keys[index]}
+                item={item}
+                onRemove={
+                  locked
+                    ? undefined
+                    : () => onItemsChange(items.filter((_, i) => i !== index))
+                }
+              />
+            ),
+          )}
+          {!locked && (
+            <ul className="divide-y divide-hairline rounded-2xl bg-canvas px-4 shadow-card">
+              {addMore}
+              {input.links && <li>{urlRow}</li>}
+            </ul>
+          )}
+        </div>
+      ) : (
         <ul
           className={`max-h-60 divide-y divide-hairline overflow-y-auto ${over ? 'bg-ink/5' : ''}`}
         >
@@ -313,28 +388,7 @@ export function DropZone({
         </ul>
       )}
 
-      {input.links && !locked && (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            addLink(link);
-          }}
-          className={`${row} ${items.length === 0 || strip ? 'mt-2' : ''}`}
-        >
-          <span className={tile}>
-            <Globe size={15} />
-          </span>
-          <label htmlFor={urlId} className={rowLabel}>
-            Add from URL
-          </label>
-          <UrlInput
-            id={urlId}
-            value={link}
-            onChange={onLinkChange}
-            className="h-7.5 w-60 rounded-lg px-2.5"
-          />
-        </form>
-      )}
+      {input.links && !locked && !(players && items.length > 0) && urlRow}
 
       {strip && items.length > 0 && (
         <div
